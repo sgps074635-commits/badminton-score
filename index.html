@@ -1,945 +1,1023 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Trophy, Medal, PlusCircle, History, Activity, Calendar, Trash2, CheckCircle, Users, Clock, AlertCircle, ArrowRightCircle, Wifi, WifiOff, Loader, UserPlus, X, Save, Settings, Minus, Plus, BarChart2, Download, ChevronLeft, Eye } from 'lucide-react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, addDoc, deleteDoc, onSnapshot, updateDoc, writeBatch } from 'firebase/firestore';
-
-// --- Firebase 初始化 ---
-const firebaseConfig = JSON.parse(__firebase_config);
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
-// --- 集合名稱 ---
-const PLAYERS_COL = 'players';
-const MATCHES_COL = 'matches';
-const SCHEDULE_COL = 'schedule';
-const COURTS_COL = 'courts';
-const ARCHIVES_COL = 'archives';
-
-// --- 輔助函式：動態載入 html2canvas ---
-const loadHtml2Canvas = () => {
-  return new Promise((resolve, reject) => {
-    if (window.html2canvas) {
-      resolve(window.html2canvas);
-      return;
-    }
-    const script = document.createElement('script');
-    script.src = 'https://html2canvas.hertzen.com/dist/html2canvas.min.js';
-    script.onload = () => resolve(window.html2canvas);
-    script.onerror = reject;
-    document.head.appendChild(script);
-  });
-};
-
-// --- 場地卡片元件 ---
-const CourtCard = ({ courtId, colorTheme, activeMatches, onUpdateScore, onSetup, onRequestFinish, getPlayerName, onCancelMatch, competitionMode }) => {
-  const match = activeMatches[courtId];
-  const isPlaying = match && match.status === 'playing';
-  const themeClass = colorTheme === 'pink' ? 'border-pink-200 bg-pink-50' : 'border-blue-200 bg-blue-50';
-  const btnClass = colorTheme === 'pink' ? 'bg-pink-500 hover:bg-pink-600' : 'bg-blue-500 hover:bg-blue-600';
-  const textClass = colorTheme === 'pink' ? 'text-pink-600' : 'text-blue-600';
-  const borderFocusClass = colorTheme === 'pink' ? 'focus:border-pink-400' : 'focus:border-blue-400';
-
-  return (
-    <div className={`rounded-3xl border-2 p-4 shadow-sm transition-all ${themeClass} mb-4 relative`}>
-      <div className="flex justify-between items-center mb-4">
-        <div className="flex items-center gap-2">
-          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-bold ${btnClass}`}>
-            {courtId}
-          </div>
-          <span className={`font-bold text-lg ${textClass}`}>
-            {isPlaying ? '比賽進行中 🔥' : '場地空閒中'}
-          </span>
-        </div>
-        {isPlaying && <Clock size={16} className="text-gray-400 animate-pulse"/>}
-      </div>
-
-      {!isPlaying ? (
-        <div className="flex flex-col items-center py-6">
-          <Users className="text-gray-300 w-12 h-12 mb-2"/>
-          <button 
-            onClick={() => onSetup(courtId)}
-            className={`w-full py-3 rounded-xl font-bold text-white shadow-md transition-transform active:scale-95 flex justify-center items-center gap-2 ${btnClass}`}
-          >
-            <PlusCircle size={20}/> 手動建立比賽
-          </button>
-          <p className="text-xs text-gray-400 mt-2">亦可至「賽程表」直接派發</p>
-        </div>
-      ) : (
-        <div>
-          <button 
-            onClick={() => onCancelMatch(courtId)}
-            className="absolute top-4 right-4 text-gray-400 hover:text-red-500 border border-gray-300 rounded px-2 py-1 text-xs transition-colors"
-          >
-            取消
-          </button>
-
-          <div className="flex justify-between items-center gap-2 mb-4">
-            <div className="flex-1 bg-white p-3 rounded-xl text-center shadow-sm">
-              <div className="text-sm font-bold text-gray-600 mb-1">
-                <div className="truncate text-lg">{getPlayerName(match.teamA[0])}</div>
-                {competitionMode === 'individual' && match.teamA[1] && <div className="truncate text-sm text-gray-400">{getPlayerName(match.teamA[1])}</div>}
-              </div>
-              <input 
-                type="number" pattern="\d*" placeholder="0"
-                value={match.scoreA}
-                onClick={(e) => e.target.select()}
-                onChange={(e) => onUpdateScore(courtId, 'scoreA', e.target.value)}
-                className={`w-full text-center text-4xl font-black text-gray-800 border-b-2 border-gray-100 outline-none p-2 ${borderFocusClass}`}
-              />
-            </div>
-            
-            <div className="font-bold text-gray-300">VS</div>
-
-            <div className="flex-1 bg-white p-3 rounded-xl text-center shadow-sm">
-              <div className="text-sm font-bold text-gray-600 mb-1">
-                 <div className="truncate text-lg">{getPlayerName(match.teamB[0])}</div>
-                 {competitionMode === 'individual' && match.teamB[1] && <div className="truncate text-sm text-gray-400">{getPlayerName(match.teamB[1])}</div>}
-              </div>
-              <input 
-                type="number" pattern="\d*" placeholder="0"
-                value={match.scoreB}
-                onClick={(e) => e.target.select()}
-                onChange={(e) => onUpdateScore(courtId, 'scoreB', e.target.value)}
-                className={`w-full text-center text-4xl font-black text-gray-800 border-b-2 border-gray-100 outline-none p-2 ${borderFocusClass}`}
-              />
-            </div>
-          </div>
-          
-          <button 
-            onClick={() => onRequestFinish(courtId)}
-            className="w-full py-3 bg-gray-800 text-white rounded-xl font-bold shadow-md hover:bg-black transition-colors flex items-center justify-center gap-2"
-          >
-            <CheckCircle size={18}/> 結束比賽並登記
-          </button>
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default function BadmintonCloudApp() {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('players');
-
-  // --- 資料狀態 ---
-  const [players, setPlayers] = useState([]);
-  const [matches, setMatches] = useState([]);
-  const [scheduledQueue, setScheduledQueue] = useState([]);
-  const [activeMatches, setActiveMatches] = useState({ 1: null, 2: null });
-  const [archives, setArchives] = useState([]);
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>羽球比賽計分系統</title>
   
-  // --- 全域設定狀態 ---
-  const [currentRound, setCurrentRound] = useState(1);
-  const [tournamentName, setTournamentName] = useState("🏸 羽球比賽");
-  const [courtCount, setCourtCount] = useState(2);
-  const [matchesPerPlayer, setMatchesPerPlayer] = useState(4);
-  const [competitionMode, setCompetitionMode] = useState('individual'); // 'individual' | 'team'
-
-  // --- UI 狀態 ---
-  const [newPlayerName, setNewPlayerName] = useState("");
-  const [isExporting, setIsExporting] = useState(false);
-  const [selectedArchive, setSelectedArchive] = useState(null);
-  const [showArchivesModal, setShowArchivesModal] = useState(false);
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [tempSettingsName, setTempSettingsName] = useState("");
-  const [tempMode, setTempMode] = useState('individual');
-
-  // --- 手動配對狀態 ---
-  const [showSetupModal, setShowSetupModal] = useState(false);
-  const [setupCourtId, setSetupCourtId] = useState(null);
-  const [tempTeamA, setTempTeamA] = useState([]);
-  const [tempTeamB, setTempTeamB] = useState([]);
-
-  // --- 自訂對話框狀態 (取代 alert / confirm) ---
-  const [alertMsg, setAlertMsg] = useState("");
-  const [confirmDialog, setConfirmDialog] = useState(null);
-
-  // --- Auth & Data Fetching ---
-  useEffect(() => {
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (err) {
-        console.error("Auth error:", err);
-      }
-    };
-    initAuth();
-
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      if (!u) setLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    if (!user) return;
-
-    // Firebase paths
-    const pubCol = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
-    const metaDoc = doc(db, 'artifacts', appId, 'public', 'data', 'meta', 'global');
-
-    // Players
-    const unsubP = onSnapshot(pubCol(PLAYERS_COL), snap => {
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      data.sort((a, b) => a.createdAt - b.createdAt); // JS Sort
-      setPlayers(data);
-    });
-
-    // Matches
-    const unsubM = onSnapshot(pubCol(MATCHES_COL), snap => {
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      data.sort((a, b) => b.timestampRaw - a.timestampRaw);
-      setMatches(data);
-    });
-
-    // Schedule
-    const unsubS = onSnapshot(pubCol(SCHEDULE_COL), snap => {
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      data.sort((a, b) => a.createdAt - b.createdAt);
-      setScheduledQueue(data);
-    });
-
-    // Archives
-    const unsubA = onSnapshot(pubCol(ARCHIVES_COL), snap => {
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      data.sort((a, b) => b.createdAt - a.createdAt);
-      setArchives(data);
-    });
-
-    // Courts
-    const unsubC = onSnapshot(pubCol(COURTS_COL), snap => {
-      const courts = { 1: null, 2: null };
-      snap.docs.forEach(d => { courts[d.id] = d.data(); });
-      setActiveMatches(courts);
-      setLoading(false);
-    });
-
-    // Meta Settings
-    const unsubMeta = onSnapshot(metaDoc, snap => {
-      if (snap.exists()) {
-        const d = snap.data();
-        setCurrentRound(d.currentRound || 1);
-        setTournamentName(d.tournamentName || "🏸 羽球比賽");
-        setCourtCount(d.courtCount || 2);
-        setMatchesPerPlayer(d.matchesPerPlayer || 4);
-        setCompetitionMode(d.competitionMode || 'individual');
-      } else {
-        setDoc(metaDoc, { currentRound: 1, tournamentName: "🏸 羽球比賽", courtCount: 2, matchesPerPlayer: 4, competitionMode: 'individual' });
-      }
-    });
-
-    return () => { unsubP(); unsubM(); unsubS(); unsubA(); unsubC(); unsubMeta(); };
-  }, [user]);
-
-  // --- Helpers ---
-  const getPlayerName = (id) => { const p = players.find(x => x.id === id); return p ? p.name : "未知"; };
+  <!-- 1. 核心函式庫 -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   
-  const getBusyPlayerIds = () => {
-    let ids = [];
-    Object.values(activeMatches).forEach(match => {
-      if (match && match.status === 'playing') ids = [...ids, ...match.teamA, ...match.teamB];
-    });
-    return ids;
-  };
+  <!-- 2. Firebase SDK (Compat Version) -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
 
-  // --- Statistics Calculation ---
-  const stats = useMemo(() => {
-    const s = {};
-    players.forEach(p => s[p.id] = { ...p, matchesPlayed: 0, pointsWon: 0, pointsLost: 0, wins: 0, losses: 0, fullSchedule: [], lastActiveTime: 0 });
+  <!-- 3. 截圖工具 -->
+  <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
 
-    matches.forEach(m => {
-      const sA = parseInt(m.scoreA) || 0, sB = parseInt(m.scoreB) || 0, time = m.timestampRaw || 0;
-      const procTeam = (teamIds, score, oppScore, opponents) => {
-        teamIds.forEach(pid => {
-          if (s[pid]) {
-            s[pid].matchesPlayed++; s[pid].pointsWon += score; s[pid].pointsLost += oppScore;
-            if (score > oppScore) s[pid].wins++; else s[pid].losses++;
-            s[pid].lastActiveTime = Math.max(s[pid].lastActiveTime, time);
-            
-            const partner = competitionMode === 'individual' ? teamIds.find(i => i !== pid) : null;
-            const opponentsList = opponents.map(id => getPlayerName(id));
-            s[pid].fullSchedule.push({ id: m.id, type: 'finished', round: m.round, partner, opponents: opponentsList, score: `${score}-${oppScore}`, result: score > oppScore ? 'WIN' : 'LOSE', timestamp: time });
-          }
-        });
-      };
-      procTeam(m.teamA, sA, sB, m.teamB);
-      procTeam(m.teamB, sB, sA, m.teamA);
-    });
+  <style>
+    body { background-color: #fffbeb; -webkit-tap-highlight-color: transparent; }
+    .animate-spin { animation: spin 1s linear infinite; }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
 
-    Object.keys(activeMatches).forEach(cid => {
-      const m = activeMatches[cid];
-      if (m && m.status === 'playing') {
-        const sA = m.scoreA || 0, sB = m.scoreB || 0;
-        const procActive = (teamIds, score, oppScore, opponents) => {
-           teamIds.forEach(pid => {
-             if (s[pid]) {
-                const opponentsList = opponents.map(id => getPlayerName(id));
-                s[pid].fullSchedule.push({ id: `active-${cid}`, type: 'playing', round: m.round, court: cid, partner: competitionMode === 'individual' ? teamIds.find(i => i !== pid) : null, opponents: opponentsList, score: `${score}-${oppScore}`, timestamp: Date.now() });
-             }
-           });
-        };
-        procActive(m.teamA, sA, sB, m.teamB);
-        procActive(m.teamB, sB, sA, m.teamA);
-      }
-    });
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
 
-    scheduledQueue.forEach(m => {
-       const procPending = (teamIds, opponents) => {
-         teamIds.forEach(pid => {
-           if (s[pid]) {
-             const opponentsList = opponents.map(id => getPlayerName(id));
-             s[pid].fullSchedule.push({ id: m.id, type: 'pending', round: m.round, partner: competitionMode === 'individual' ? teamIds.find(i => i !== pid) : null, opponents: opponentsList, score: 'vs', timestamp: m.createdAt + 9999999999 });
-           }
-         });
-       };
-       procPending(m.teamA, m.teamB);
-       procPending(m.teamB, m.teamA);
-    });
-
-    Object.values(s).forEach(p => {
-       p.fullSchedule.sort((a, b) => {
-         const order = { 'playing': 0, 'pending': 1, 'finished': 2 };
-         if (order[a.type] !== order[b.type]) return order[a.type] - order[b.type];
-         if (a.type === 'pending') return a.round - b.round;
-         if (a.type === 'finished') return b.timestamp - a.timestamp;
-         return 0;
-       });
-    });
-
-    return Object.values(s).sort((a, b) => (b.pointsWon - a.pointsWon) || (a.pointsLost - b.pointsLost)).map((p, i) => ({ ...p, rank: i + 1 }));
-  }, [matches, players, activeMatches, scheduledQueue, competitionMode]);
-
-  // --- Firebase DB Actions ---
-  const updateMeta = async (k, v) => {
-    if (!user) return;
-    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'meta', 'global'), { [k]: v });
-  };
-
-  const saveSettings = async () => {
-    if (!tempSettingsName.trim() || !user) return;
-    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'meta', 'global'), {
-      tournamentName: tempSettingsName.trim(),
-      competitionMode: tempMode
-    });
-    setShowSettingsModal(false);
-  };
-
-  const addPlayer = async () => {
-    if (!newPlayerName.trim() || !user) return;
-    const id = Date.now().toString();
-    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', PLAYERS_COL, id), { name: newPlayerName.trim(), createdAt: Date.now() });
-    setNewPlayerName("");
-  };
-
-  const deletePlayer = async (id) => {
-    if (!user) return;
-    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', PLAYERS_COL, id));
-  };
-
-  const generateAllMatches = async () => {
-    if (players.length < 4) {
-      setAlertMsg("選手/隊伍人數不足 4 人，無法產生賽程！");
-      return;
-    }
-
-    // JS-based batching workaround without true transactions for simplicity and compatibility
-    // First, clear existing schedule
-    for (const s of scheduledQueue) {
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', SCHEDULE_COL, s.id));
-    }
-
-    const pIds = players.map(p => p.id);
-    const TARGET_MATCHES = matchesPerPlayer;
-    let totalMatchesToGenerate = competitionMode === 'team' ? Math.ceil((pIds.length * TARGET_MATCHES) / 2) : Math.ceil((pIds.length * TARGET_MATCHES) / 4);
-
-    const hist = new Set();
-    const oppGraph = {};
-    const addRec = (p1, p2) => { if (!oppGraph[p1]) oppGraph[p1] = new Set(); if (!oppGraph[p2]) oppGraph[p2] = new Set(); oppGraph[p1].add(p2); oppGraph[p2].add(p1); };
-    
-    const addH = (A, B) => {
-      if (competitionMode === 'individual') {
-        hist.add([...A].sort().join('-')); hist.add([...B].sort().join('-'));
-        addRec(A[0], B[0]); addRec(A[0], B[1]); addRec(A[1], B[0]); addRec(A[1], B[1]);
-      } else {
-        addRec(A[0], B[0]);
-      }
+    // --- Firebase 設定 (您的金鑰) ---
+    const firebaseConfig = {
+      apiKey: "AIzaSyCbymmRj8YKrArQipNEorDWhXdp_5bR9_g",
+      authDomain: "badminton-app-1340e.firebaseapp.com",
+      projectId: "badminton-app-1340e",
+      storageBucket: "badminton-app-1340e.firebasestorage.app",
+      messagingSenderId: "215784851868",
+      appId: "1:215784851868:web:3225afd5a390716503a059"
     };
-    
-    matches.forEach(m => addH(m.teamA, m.teamB));
-    Object.values(activeMatches).forEach(m => { if (m && m.status === 'playing') addH(m.teamA, m.teamB); });
 
-    let sched = [], success = false;
-    for (let attempt = 0; attempt < 100; attempt++) {
-      let tempSched = [], tempH = new Set(hist), playCounts = {}, valid = true;
-      let tempOppGraph = {};
-      Object.keys(oppGraph).forEach(k => tempOppGraph[k] = new Set(oppGraph[k]));
-      pIds.forEach(id => playCounts[id] = 0);
-
-      for (let m = 0; m < totalMatchesToGenerate; m++) {
-        let cands = pIds.filter(id => playCounts[id] < matchesPerPlayer);
-        if (m > 0) {
-          const pm = tempSched[m - 1];
-          cands = cands.filter(id => ![...pm.teamA, ...pm.teamB].includes(id));
-        }
-        
-        const minNeeded = competitionMode === 'team' ? 2 : 4;
-        if (cands.length < minNeeded) { valid = false; break; }
-        
-        let bestM = null, minReps = Infinity;
-        
-        for (let k = 0; k < 30; k++) {
-          const pool = [...cands].sort(() => 0.5 - Math.random());
-          let tA, tB;
-
-          if (competitionMode === 'team') {
-            const p1 = pool[0];
-            let p2Idx = 0;
-            for (let idx = 0; idx < pool.length - 1; idx++) {
-              const candidate = pool[idx + 1];
-              if (!(tempOppGraph[p1] && tempOppGraph[p1].has(candidate))) { p2Idx = idx; break; }
-            }
-            tA = [p1]; tB = [pool[1 + p2Idx]];
-          } else {
-            const p1 = pool[0];
-            const p2Idx = pool.slice(1).findIndex(p => !tempH.has([p1, p].sort().join('-')));
-            if (p2Idx === -1) continue;
-            const p2 = pool[1 + p2Idx];
-            const rem = pool.filter(p => p !== p1 && p !== p2);
-            if (rem.length < 2) continue;
-            const p3 = rem[0];
-            const p4Idx = rem.slice(1).findIndex(p => !tempH.has([p3, p].sort().join('-')));
-            if (p4Idx === -1) continue;
-            const p4 = rem[1 + p4Idx];
-            tA = [p1, p2]; tB = [p3, p4];
-          }
-          
-          let r = 0;
-          const checkR = (a, b) => (tempOppGraph[a] && tempOppGraph[a].has(b)) ? 1 : 0;
-          if (competitionMode === 'team') {
-            r = checkR(tA[0], tB[0]);
-          } else {
-            r = checkR(tA[0], tB[0]) + checkR(tA[0], tB[1]) + checkR(tA[1], tB[0]) + checkR(tA[1], tB[1]);
-          }
-          
-          if (r === 0) { bestM = { teamA: tA, teamB: tB }; break; }
-          if (r < minReps) { minReps = r; bestM = { teamA: tA, teamB: tB }; }
-        }
-        
-        if (bestM) {
-          tempSched.push(bestM);
-          if (competitionMode === 'individual') {
-            tempH.add([...bestM.teamA].sort().join('-')); tempH.add([...bestM.teamB].sort().join('-'));
-            const addTO = (a, b) => { if (!tempOppGraph[a]) tempOppGraph[a] = new Set(); if (!tempOppGraph[b]) tempOppGraph[b] = new Set(); tempOppGraph[a].add(b); tempOppGraph[b].add(a); };
-            addTO(bestM.teamA[0], bestM.teamB[0]); addTO(bestM.teamA[0], bestM.teamB[1]); addTO(bestM.teamA[1], bestM.teamB[0]); addTO(bestM.teamA[1], bestM.teamB[1]);
-          } else {
-            const addTO = (a, b) => { if (!tempOppGraph[a]) tempOppGraph[a] = new Set(); if (!tempOppGraph[b]) tempOppGraph[b] = new Set(); tempOppGraph[a].add(b); tempOppGraph[b].add(a); };
-            addTO(bestM.teamA[0], bestM.teamB[0]);
-          }
-          [...bestM.teamA, ...bestM.teamB].forEach(p => playCounts[p]++);
-        } else { valid = false; break; }
-      }
-      if (valid) { sched = tempSched; success = true; break; }
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
     }
+    const db = firebase.firestore();
+    const auth = firebase.auth();
 
-    if (!success) {
-      setAlertMsg("無法生成完美不重複賽程，請調整條件！");
-      return;
-    }
+    // 資料庫路徑
+    const PUBLIC_DATA = `badminton_2024_final`; 
+    const DATA_GROUP = 'core'; 
+    const MATCHES_COL = 'matches';       
+    const SCHEDULE_COL = 'schedule';     
+    const COURTS_COL = 'courts';         
+    const PLAYERS_COL = 'players'; 
+    const ARCHIVES_COL = 'archives';
+    const META_COL = 'meta';  
 
-    // Write new schedule
-    for (let i = 0; i < sched.length; i++) {
-      const m = sched[i];
-      const div = competitionMode === 'team' ? 2 : 4;
-      const rNum = Math.floor(i / (players.length / div)) + 1;
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', SCHEDULE_COL), {
-        teamA: m.teamA, teamB: m.teamB, round: rNum, createdAt: Date.now() + i, status: 'pending'
-      });
-    }
+    // 預設名單
+    const INITIAL_PLAYERS = [
+      { id: 1, name: '信嵐' }, { id: 2, name: '英哲' },
+      { id: 3, name: '聖恩' }, { id: 4, name: '建華' },
+      { id: 5, name: '建寧' }, { id: 6, name: '志樫' },
+      { id: 7, name: '冠軍佑' }, { id: 8, name: '冠朋' },
+      { id: 9, name: '奇璋' }, { id: 10, name: '俊淵' },
+      { id: 11, name: '文武大叔' }, { id: 12, name: '鴻昌' },
+    ];
 
-    if (matches.length === 0) {
-      await updateMeta('currentRound', 1);
-    }
-  };
+    // 圖示元件 (SVG)
+    const Icons = {
+      Users: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>,
+      Calendar: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>,
+      Activity: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>,
+      BarChart2: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>,
+      Trophy: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M8 21h8m-4-9v9m-4.8-9a3 3 0 1 0 13.6 0M6 9h12a1 1 0 0 1 1 1v3c0 2.67-1.8 5-4 5.5V12M6 12v6.5c-2.2-.5-4-2.83-4-5.5V10a1 1 0 0 1 1-1h3z"></path></svg>,
+      History: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M3 6v18h18v-2H5V6zm5-4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8zm2 2h7v14H10V4z"></path></svg>,
+      Archive: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>,
+      Clock: (props) => <span>⏰</span>,
+      CheckCircle: (props) => <span className="text-green-500">✅</span>,
+      X: (props) => <span className="text-red-500">❌</span>,
+      Zap: (props) => <span>⚡</span>,
+      Settings: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>,
+      Wifi: (props) => <span className="text-green-300">●</span>,
+      WifiOff: (props) => <span className="text-red-300">○</span>,
+      Minus: (props) => <span>-</span>,
+      Plus: (props) => <span>+</span>,
+      Trash2: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>,
+      Save: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>,
+      Download: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>,
+      ArrowRightCircle: (props) => <span>➜</span>,
+      User: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>,
+      Edit3: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>,
+      UserPlus: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><line x1="20" y1="8" x2="20" y2="14"></line><line x1="23" y1="11" x2="17" y2="11"></line></svg>,
+      AlertCircle: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>,
+      Eye: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>,
+      ChevronLeft: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><polyline points="15 18 9 12 15 6"></polyline></svg>
+    };
 
-  const dispatchMatchToCourt = async (matchId, courtId) => {
-    if (!user) return;
-    const m = scheduledQueue.find(x => x.id === matchId);
-    if (!m) return;
-    if ([...m.teamA, ...m.teamB].some(id => getBusyPlayerIds().includes(id))) {
-      setAlertMsg("選手忙碌中，無法派發！");
-      return;
-    }
+    // --- 場地卡片元件 ---
+    const CourtCard = ({ courtId, colorTheme, activeMatches, onUpdateScore, onSetup, onRequestFinish, getPlayerName, onCancelMatch, competitionMode }) => {
+      const match = activeMatches[courtId];
+      const isPlaying = match && match.status === 'playing';
+      
+      const isOdd = courtId % 2 !== 0;
+      const themeClass = isOdd ? 'border-pink-200 bg-pink-50' : 'border-blue-200 bg-blue-50';
+      const btnClass = isOdd ? 'bg-pink-500 hover:bg-pink-600' : 'bg-blue-500 hover:bg-blue-600';
+      const textClass = isOdd ? 'text-pink-600' : 'text-blue-600';
+      const borderFocusClass = isOdd ? 'focus:border-pink-400' : 'focus:border-blue-400';
 
-    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', COURTS_COL, courtId.toString()), {
-      ...m, scoreA: '', scoreB: '', status: 'playing', startTime: Date.now()
-    });
-    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', SCHEDULE_COL, matchId));
-    setActiveTab('courts');
-  };
-
-  const finishCourtMatch = async (courtId, match) => {
-    if (!user) return;
-    const finalScoreA = match.scoreA === '' ? 0 : match.scoreA;
-    const finalScoreB = match.scoreB === '' ? 0 : match.scoreB;
-
-    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', MATCHES_COL), {
-      ...match,
-      scoreA: finalScoreA,
-      scoreB: finalScoreB,
-      timestampRaw: Date.now(),
-      timestamp: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })
-    });
-    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', COURTS_COL, courtId.toString()));
-  };
-
-  const deleteAllHistory = async () => {
-    if (!user) return;
-    for (const m of matches) {
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', MATCHES_COL, m.id));
-    }
-    for (const s of scheduledQueue) {
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', SCHEDULE_COL, s.id));
-    }
-    await updateMeta('currentRound', 1);
-  };
-
-  const saveToArchives = async () => {
-    if (!user) return;
-    const snap = stats.map((p, i) => ({ rank: i + 1, id: p.id, name: p.name, wins: p.wins, losses: p.losses, pointsWon: p.pointsWon, pointsLost: p.pointsLost }));
-    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', ARCHIVES_COL), {
-      tournamentName, createdAt: Date.now(), dateStr: new Date().toLocaleDateString('zh-TW'), standings: snap
-    });
-    setAlertMsg("英雄榜已成功封存！");
-  };
-
-  const downloadImage = async () => {
-    setIsExporting(true);
-    try {
-      const html2canvas = await loadHtml2Canvas();
-      const el = document.getElementById('standings-capture');
-      if (!el) throw new Error("找不到截圖元素");
-      const cvs = await html2canvas(el, { backgroundColor: '#fffbeb', scale: 2 });
-      const a = document.createElement('a');
-      a.download = tournamentName + "_英雄榜.png";
-      a.href = cvs.toDataURL();
-      a.click();
-    } catch (e) {
-      setAlertMsg("截圖下載失敗");
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  // --- Court Manual Setup ---
-  const toggleSel = (pid, team) => {
-    const busy = getBusyPlayerIds(); if (busy.includes(pid)) return;
-    const limit = competitionMode === 'team' ? 1 : 2;
-    if (team === 'A') {
-      if (tempTeamA.includes(pid)) setTempTeamA(tempTeamA.filter(i => i !== pid));
-      else {
-        if (tempTeamB.includes(pid)) setTempTeamB(tempTeamB.filter(i => i !== pid));
-        if (tempTeamA.length < limit) setTempTeamA([...tempTeamA, pid]);
-      }
-    } else {
-      if (tempTeamB.includes(pid)) setTempTeamB(tempTeamB.filter(i => i !== pid));
-      else {
-        if (tempTeamA.includes(pid)) setTempTeamA(tempTeamA.filter(i => i !== pid));
-        if (tempTeamB.length < limit) setTempTeamB([...tempTeamB, pid]);
-      }
-    }
-  };
-
-  const startManualMatch = async () => {
-    if (!user) return;
-    const limit = competitionMode === 'team' ? 1 : 2;
-    if (tempTeamA.length !== limit || tempTeamB.length !== limit) return;
-
-    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', COURTS_COL, setupCourtId.toString()), {
-      teamA: tempTeamA, teamB: tempTeamB, scoreA: '', scoreB: '', status: 'playing', round: currentRound, startTime: Date.now()
-    });
-    setShowSetupModal(false);
-  };
-
-  // --- Rendering ---
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-amber-50 text-teal-600 font-bold gap-2">
-        <Loader className="animate-spin" /> 連線至雲端中...
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-amber-50 font-sans text-gray-800 pb-24">
-      {/* 頂部標題 */}
-      <div className="bg-gradient-to-br from-teal-400 to-emerald-500 text-white p-6 rounded-b-[3rem] shadow-lg mb-6 relative">
-        <div className="absolute top-4 right-4 text-xs bg-black/20 px-2 py-1 rounded-full flex items-center gap-1">
-          {user ? <><Wifi size={12} /> 同步中</> : <><WifiOff size={12} /> 離線</>}
-        </div>
-        <div className="flex items-center justify-center gap-2 mb-2">
-          <h1 className="text-2xl font-bold cursor-pointer" onClick={() => { setTempSettingsName(tournamentName); setTempMode(competitionMode); setShowSettingsModal(true); }}>{tournamentName}</h1>
-          <button onClick={() => { setTempSettingsName(tournamentName); setTempMode(competitionMode); setShowSettingsModal(true); }} className="opacity-50 hover:opacity-100"><Settings size={18} /></button>
-        </div>
-        <div className="flex justify-center text-sm gap-4 opacity-90">
-          <span className="bg-white/20 px-2 py-1 rounded-full">第 {currentRound} 輪</span>
-          <span className="bg-white/20 px-2 py-1 rounded-full">{courtCount} 場地</span>
-          <span className="bg-white/20 px-2 py-1 rounded-full">{players.length} {competitionMode === 'team' ? '隊伍' : '選手'}</span>
-        </div>
-      </div>
-
-      {/* 6格導覽列 (3x2) */}
-      <div className="grid grid-cols-3 gap-2 mb-6 px-4">
-        {[
-          { id: 'players', icon: <Users size={16} />, label: competitionMode === 'team' ? '隊伍' : '人員', color: 'text-pink-500' },
-          { id: 'schedule', icon: <Calendar size={16} />, label: '賽程', color: 'text-green-600' },
-          { id: 'courts', icon: <Activity size={16} />, label: '場地', color: 'text-blue-500' },
-          { id: 'racing', icon: <BarChart2 size={16} />, label: '即時成績', color: 'text-orange-500' },
-          { id: 'standings', icon: <Trophy size={16} />, label: '英雄榜', color: 'text-yellow-600' },
-          { id: 'history', icon: <History size={16} />, label: '清除', color: 'text-purple-500' },
-        ].map(t => (
-          <button
-            key={t.id}
-            onClick={() => setActiveTab(t.id)}
-            className={`flex items-center justify-center gap-1 py-3 rounded-xl text-xs font-bold transition-all ${activeTab === t.id ? 'bg-white shadow-md scale-105 ' + t.color : 'bg-white/40 text-gray-400 hover:bg-white/60'}`}
-          >
-            {t.icon} {t.label}
-          </button>
-        ))}
-      </div>
-
-      {/* 主要內容區 */}
-      <div className="px-4 max-w-md mx-auto">
-
-        {/* 1. 人員 / 隊伍管理 */}
-        {activeTab === 'players' && (
-          <div className="bg-white p-5 rounded-3xl shadow-sm border border-pink-100">
-            <h2 className="text-xl font-bold text-pink-600 mb-4 flex items-center gap-2"><Users size={20}/> {competitionMode === 'team' ? '隊伍' : '選手'}管理</h2>
-            <div className="flex gap-2 mb-6">
-              <input type="text" value={newPlayerName} onChange={e => setNewPlayerName(e.target.value)} placeholder={`輸入${competitionMode === 'team' ? '隊名' : '姓名'}...`}
-                className="flex-1 border-2 border-pink-100 rounded-xl px-4 py-2 outline-none focus:border-pink-400"
-                onKeyDown={e => e.key === 'Enter' && addPlayer()} />
-              <button onClick={addPlayer} className="bg-pink-500 text-white p-3 rounded-xl shadow active:scale-95"><UserPlus size={20}/></button>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              {players.map(p => (
-                <div key={p.id} className="bg-pink-50 p-3 rounded-xl flex justify-between items-center group">
-                  <span className="font-bold text-gray-700 truncate">{p.name}</span>
-                  <button onClick={() => setConfirmDialog({ message: `確定刪除 ${p.name} 嗎？`, onConfirm: () => deletePlayer(p.id) })} className="text-pink-300 hover:text-red-500"><X size={16}/></button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* 2. 賽程表 */}
-        {activeTab === 'schedule' && (
-          <div className="space-y-4">
-            <div className="bg-white p-5 rounded-3xl shadow-sm border border-green-100">
-              <div className="flex justify-between mb-4 border-b border-gray-100 pb-4">
-                <div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-500">場地數</span><button onClick={() => updateMeta('courtCount', Math.max(1, courtCount - 1))} className="p-1 hover:bg-gray-100 rounded"><Minus size={16} /></button><span className="font-black text-blue-600 w-4 text-center">{courtCount}</span><button onClick={() => updateMeta('courtCount', Math.min(10, courtCount + 1))} className="p-1 hover:bg-gray-100 rounded"><Plus size={16} /></button></div>
-                <div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-500">每人場數</span><button onClick={() => updateMeta('matchesPerPlayer', Math.max(1, matchesPerPlayer - 1))} className="p-1 hover:bg-gray-100 rounded"><Minus size={16} /></button><span className="font-black text-green-600 w-4 text-center">{matchesPerPlayer}</span><button onClick={() => updateMeta('matchesPerPlayer', Math.min(10, matchesPerPlayer + 1))} className="p-1 hover:bg-gray-100 rounded"><Plus size={16} /></button></div>
+      return (
+        <div className={`rounded-3xl border-2 p-4 shadow-sm transition-all ${themeClass} mb-4 relative`}>
+          <div className="flex justify-between items-center mb-4">
+            <div className="flex items-center gap-2">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-bold ${btnClass}`}>
+                {courtId}
               </div>
-
-              <button onClick={() => setConfirmDialog({ message: "這將清除目前待打賽程，重新產生組合，確定嗎？", onConfirm: generateAllMatches })} className="w-full py-3 bg-purple-500 hover:bg-purple-600 text-white rounded-xl font-bold shadow flex justify-center items-center gap-2 transition-all active:scale-95"><Activity size={18}/> 生成全賽事</button>
-              {scheduledQueue.length > 0 && <button onClick={() => setConfirmDialog({ message: "確定要清空賽程表嗎？", onConfirm: async () => { for (const s of scheduledQueue) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', SCHEDULE_COL, s.id)); } })} className="w-full mt-2 py-2 bg-red-100 hover:bg-red-200 text-red-600 rounded-xl font-bold flex justify-center gap-2 text-sm transition-colors"><Trash2 size={16}/> 清空賽程</button>}
+              <span className={`font-bold text-lg ${textClass}`}>
+                {isPlaying ? '比賽進行中 🔥' : '場地空閒中'}
+              </span>
             </div>
-
-            {scheduledQueue.map((m, i) => {
-              const busy = [...m.teamA, ...m.teamB].some(id => getBusyPlayerIds().includes(id));
-              return (
-                <div key={m.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200">
-                  <div className="flex justify-between mb-3 text-xs text-gray-500"><span className="bg-gray-100 px-2 py-1 rounded font-bold">R{m.round} - 第 {i + 1} 場</span>{busy && <span className="text-red-400 flex items-center gap-1 font-bold"><AlertCircle size={12} /> 等候中</span>}</div>
-                  <div className="flex justify-between font-bold text-gray-800 mb-4">
-                    <div className="w-1/2 text-center border-r border-gray-100">
-                      <div className="truncate">{getPlayerName(m.teamA[0])}</div>
-                      {competitionMode === 'individual' && m.teamA[1] && <div className="truncate">{getPlayerName(m.teamA[1])}</div>}
-                    </div>
-                    <div className="text-gray-300 px-2">VS</div>
-                    <div className="w-1/2 text-center">
-                      <div className="truncate">{getPlayerName(m.teamB[0])}</div>
-                      {competitionMode === 'individual' && m.teamB[1] && <div className="truncate">{getPlayerName(m.teamB[1])}</div>}
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    {Array.from({ length: courtCount }).map((_, k) => (
-                      <button key={k} disabled={busy || activeMatches[k + 1]?.status === 'playing'} onClick={() => dispatchMatchToCourt(m.id, k + 1)} className={`py-2 rounded-lg font-bold text-sm transition-colors flex items-center justify-center gap-1 ${busy || activeMatches[k + 1]?.status === 'playing' ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : (k % 2 ? 'bg-blue-100 text-blue-600 hover:bg-blue-200' : 'bg-pink-100 text-pink-600 hover:bg-pink-200')}`}><ArrowRightCircle size={14}/> {k + 1} 場</button>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
+            {isPlaying && <div className="animate-pulse"><Icons.Clock/></div>}
           </div>
-        )}
 
-        {/* 3. 比賽場地 */}
-        {activeTab === 'courts' && (
-          <div>
-            {Array.from({ length: courtCount }).map((_, i) => (
-              <CourtCard
-                key={i + 1}
-                courtId={i + 1}
-                colorTheme={i % 2 === 0 ? "pink" : "blue"}
-                activeMatches={activeMatches}
-                onUpdateScore={(cid, f, v) => {
-                  const val = v === '' ? '' : parseInt(v);
-                  if (val !== '' && isNaN(val)) return;
-                  updateDoc(doc(db, 'artifacts', appId, 'public', 'data', COURTS_COL, cid.toString()), { [f]: val });
-                }}
-                onSetup={(id) => { setSetupCourtId(id); setTempTeamA([]); setTempTeamB([]); setShowSetupModal(true); }}
-                onRequestFinish={(id) => {
-                  const match = activeMatches[id];
-                  if (!match) return;
-                  setConfirmDialog({
-                    message: `確定結束 ${id} 號場地比賽並登記？\n比分：${match.scoreA || 0} - ${match.scoreB || 0}`,
-                    onConfirm: () => finishCourtMatch(id, match)
-                  });
-                }}
-                onCancelMatch={(id) => {
-                  setConfirmDialog({
-                    message: `確定取消這場比賽嗎？成績將不會保留。`,
-                    onConfirm: () => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', COURTS_COL, id.toString()))
-                  });
-                }}
-                getPlayerName={getPlayerName}
-                competitionMode={competitionMode}
-              />
-            ))}
-          </div>
-        )}
+          {!isPlaying ? (
+            <div className="flex flex-col items-center py-6">
+              <div className="mb-2 text-gray-300"><Icons.Users/></div>
+              <button 
+                onClick={() => onSetup(courtId)}
+                className={`w-full py-3 rounded-xl font-bold text-white shadow-md active:scale-95 flex justify-center items-center gap-2 ${btnClass}`}
+              >
+                <span>+</span> 手動建立比賽
+              </button>
+              <p className="text-xs text-gray-400 mt-2">亦可至「賽程表」直接派發</p>
+            </div>
+          ) : (
+            <div>
+              <button 
+                onClick={() => onCancelMatch(courtId)}
+                className="absolute top-4 right-4 text-gray-400 hover:text-red-500 border border-gray-300 rounded px-2 py-1 text-xs transition-colors"
+              >
+                取消
+              </button>
 
-        {/* 4. 即時成績 */}
-        {activeTab === 'racing' && (
-          <div className="space-y-4">
-            {[...stats].sort((a, b) => b.lastActiveTime - a.lastActiveTime).map(p => (
-              <div key={p.id} className="bg-white p-4 rounded-3xl shadow-sm border border-gray-100">
-                <div className="flex justify-between items-center mb-3 border-b border-gray-100 pb-2">
-                  <div>
-                    <h3 className="font-bold text-gray-800 text-lg">{p.name}</h3>
-                    <div className="text-xs text-gray-400 mt-1">{p.wins}勝 {p.losses}敗 / 得 {p.pointsWon} 失 {p.pointsLost}</div>
+              <div className="flex justify-between items-center gap-2 mb-4">
+                <div className="flex-1 bg-white p-3 rounded-xl text-center shadow-sm">
+                  <div className="text-sm font-bold text-gray-600 mb-1">
+                    <div className="truncate text-lg">{getPlayerName(match.teamA[0])}</div>
+                    {competitionMode === 'individual' && match.teamA[1] && <div className="truncate text-sm text-gray-400">{getPlayerName(match.teamA[1])}</div>}
                   </div>
-                  <div className="text-3xl font-black text-gray-200">#{p.rank}</div>
+                  <input 
+                    type="number" pattern="\d*" placeholder="0"
+                    value={match.scoreA}
+                    onClick={(e) => e.target.select()}
+                    onChange={(e) => onUpdateScore(courtId, 'scoreA', e.target.value)}
+                    className={`w-full text-center text-4xl font-black text-gray-800 border-b-2 border-gray-100 outline-none p-2 ${borderFocusClass}`}
+                  />
                 </div>
-                <div className="space-y-2">
-                  {p.fullSchedule.length === 0 ? <div className="text-center text-xs text-gray-300 py-2">尚無賽程</div> : p.fullSchedule.map((m, i) => {
-                    let color = "bg-gray-50 border-gray-100", label = "待";
-                    if (m.type === 'finished') { color = m.result === 'WIN' ? "bg-green-50 border-green-100" : "bg-red-50 border-red-100"; label = m.result; }
-                    if (m.type === 'playing') { color = "bg-blue-50 border-blue-200 animate-pulse"; label = "戰"; }
-                    const partner = m.partner ? getPlayerName(m.partner) : '';
-                    const opps = m.opponents.join(" / ");
-                    return (
-                      <div key={i} className={`flex items-center text-xs p-2 rounded-lg border ${color}`}>
-                        <div className="w-8 font-bold text-center mr-2 opacity-70">{label}</div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex justify-between items-center font-bold text-gray-700">
-                            <span className="truncate mr-2">vs {opps}</span>
-                            <span className="whitespace-nowrap">{m.score} <span className="font-normal text-gray-400">{partner ? `(${partner})` : ''}</span></span>
-                          </div>
-                          {(m.type === 'playing' || m.type === 'pending') && <div className="text-right text-[10px] text-gray-400 mt-1">{m.type === 'playing' ? `📍 ${m.court}號場` : `📅 R${m.round}`}</div>}
-                        </div>
-                      </div>
-                    )
-                  })}
+                
+                <div className="font-bold text-gray-300">VS</div>
+
+                <div className="flex-1 bg-white p-3 rounded-xl text-center shadow-sm">
+                  <div className="text-sm font-bold text-gray-600 mb-1">
+                     <div className="truncate text-lg">{getPlayerName(match.teamB[0])}</div>
+                     {competitionMode === 'individual' && match.teamB[1] && <div className="truncate text-sm text-gray-400">{getPlayerName(match.teamB[1])}</div>}
+                  </div>
+                  <input 
+                    type="number" pattern="\d*" placeholder="0"
+                    value={match.scoreB}
+                    onClick={(e) => e.target.select()}
+                    onChange={(e) => onUpdateScore(courtId, 'scoreB', e.target.value)}
+                    className={`w-full text-center text-4xl font-black text-gray-800 border-b-2 border-gray-100 outline-none p-2 ${borderFocusClass}`}
+                  />
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-
-        {/* 5. 英雄榜 */}
-        {activeTab === 'standings' && (
-          <div className="space-y-3">
-            <div className="flex justify-end gap-2 mb-2">
-              <button onClick={() => setShowArchivesModal(true)} className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-2 rounded-xl shadow-sm text-sm font-bold flex items-center gap-1 transition-colors"><History size={16} /> 歷年成績</button>
-              <button onClick={() => setConfirmDialog({ message: "確定要將目前的排行榜封存到歷年成績中嗎？", onConfirm: saveToArchives })} className="bg-green-500 hover:bg-green-600 text-white px-3 py-2 rounded-xl shadow-sm text-sm font-bold flex items-center gap-1 transition-colors"><Save size={16} /> 封存本次</button>
-              <button onClick={downloadImage} disabled={isExporting} className="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-2 rounded-xl shadow-sm text-sm font-bold flex items-center gap-1 transition-colors disabled:opacity-50">
-                {isExporting ? <Loader size={16} className="animate-spin" /> : <Download size={16} />} 截圖
+              
+              <button 
+                onClick={() => onRequestFinish(courtId)}
+                className="w-full py-3 bg-gray-800 text-white rounded-xl font-bold shadow-md hover:bg-black transition-colors flex items-center justify-center gap-2"
+              >
+                <Icons.CheckCircle/> 結束比賽並登記
               </button>
             </div>
+          )}
+        </div>
+      );
+    };
+
+    // --- 主程式 ---
+    const App = () => {
+      const [user, setUser] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [activeTab, setActiveTab] = useState('players');
+
+      // --- 資料狀態 ---
+      const [players, setPlayers] = useState([]);
+      const [matches, setMatches] = useState([]);
+      const [scheduledQueue, setScheduledQueue] = useState([]);
+      const [activeMatches, setActiveMatches] = useState({ 1: null, 2: null });
+      const [archives, setArchives] = useState([]);
+      
+      // --- 全域設定狀態 ---
+      const [currentRound, setCurrentRound] = useState(1);
+      const [tournamentName, setTournamentName] = useState("🏸 羽球比賽");
+      const [courtCount, setCourtCount] = useState(2);
+      const [matchesPerPlayer, setMatchesPerPlayer] = useState(4);
+      const [competitionMode, setCompetitionMode] = useState('individual'); // 'individual' | 'team'
+
+      // --- UI 狀態 ---
+      const [newPlayerName, setNewPlayerName] = useState("");
+      const [isExporting, setIsExporting] = useState(false);
+      const [selectedArchive, setSelectedArchive] = useState(null);
+      const [showArchivesModal, setShowArchivesModal] = useState(false);
+      const [showSettingsModal, setShowSettingsModal] = useState(false);
+      
+      const [tempSettingsName, setTempSettingsName] = useState("");
+      const [tempMode, setTempMode] = useState('individual');
+
+      // --- 手動配對與確認狀態 ---
+      const [showSetupModal, setShowSetupModal] = useState(false);
+      const [setupCourtId, setSetupCourtId] = useState(null);
+      const [tempTeamA, setTempTeamA] = useState([]);
+      const [tempTeamB, setTempTeamB] = useState([]);
+      
+      // 結束比賽專用狀態
+      const [finishConfirmData, setFinishConfirmData] = useState(null);
+
+      // --- 自訂對話框狀態 ---
+      const [alertMsg, setAlertMsg] = useState("");
+      const [confirmDialog, setConfirmDialog] = useState(null);
+
+      // --- Auth & Data Fetching ---
+      useEffect(() => {
+        auth.signInAnonymously().catch(e => console.error("Auth error", e));
+        return auth.onAuthStateChanged(u => { setUser(u); if (!u) setLoading(false); });
+      }, []);
+
+      useEffect(() => {
+        if (!user) return;
+
+        // 1. 同步選手 (如果是空的，自動寫入預設名單)
+        const unsubP = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(PLAYERS_COL).orderBy('createdAt', 'asc').onSnapshot(snap => {
+            if (snap.empty) {
+                const batch = db.batch();
+                INITIAL_PLAYERS.forEach(p => {
+                    const ref = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(PLAYERS_COL).doc(p.id.toString());
+                    batch.set(ref, { name: p.name, createdAt: Date.now() + p.id });
+                });
+                batch.commit();
+            } else {
+                setPlayers(snap.docs.map(d => ({id: d.id, ...d.data()})));
+            }
+        });
+
+        // 2. 同步歷史記錄
+        const unsubM = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(MATCHES_COL).orderBy('timestampRaw', 'desc')
+          .onSnapshot(snap => setMatches(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+          
+        // 3. 同步賽程
+        const unsubS = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(SCHEDULE_COL).orderBy('createdAt', 'asc')
+          .onSnapshot(snap => setScheduledQueue(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+          
+        // 4. 同步歷年成績
+        const unsubA = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(ARCHIVES_COL).orderBy('createdAt', 'desc')
+          .onSnapshot(snap => setArchives(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+          
+        // 5. 同步場地
+        const unsubC = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(COURTS_COL)
+          .onSnapshot(snap => {
+            const c = {1: null, 2: null};
+            snap.docs.forEach(d => { c[d.id] = d.data(); });
+            setActiveMatches(c);
+            setLoading(false);
+          });
+          
+        // 6. 同步全域設定
+        const unsubMeta = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(META_COL).doc('global')
+          .onSnapshot(snap => {
+            if(snap.exists) {
+                const d = snap.data();
+                setCurrentRound(d.currentRound || 1);
+                setTournamentName(d.tournamentName || "🏸 羽球比賽");
+                setCourtCount(d.courtCount || 2);
+                setMatchesPerPlayer(d.matchesPerPlayer || 4);
+                setCompetitionMode(d.competitionMode || 'individual');
+            } else {
+                db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(META_COL).doc('global')
+                  .set({currentRound: 1, tournamentName: "🏸 羽球比賽", courtCount: 2, matchesPerPlayer: 4, competitionMode: 'individual'});
+            }
+          });
+
+        return () => { unsubP(); unsubM(); unsubS(); unsubA(); unsubC(); unsubMeta(); };
+      }, [user]);
+
+      // --- Helpers ---
+      const getPlayerName = (id) => { const p = players.find(x => x.id === id); return p ? p.name : "未知"; };
+      
+      const getBusyPlayerIds = () => {
+        let ids = [];
+        Object.values(activeMatches).forEach(match => {
+          if (match && match.status === 'playing') ids = [...ids, ...match.teamA, ...match.teamB];
+        });
+        return ids;
+      };
+
+      // --- Statistics Calculation ---
+      const stats = useMemo(() => {
+        const s = {};
+        players.forEach(p => s[p.id] = { ...p, matchesPlayed: 0, pointsWon: 0, pointsLost: 0, wins: 0, losses: 0, fullSchedule: [], lastActiveTime: 0 });
+
+        matches.forEach(m => {
+          const sA = parseInt(m.scoreA) || 0, sB = parseInt(m.scoreB) || 0, time = m.timestampRaw || 0;
+          const procTeam = (teamIds, score, oppScore, opponents) => {
+            teamIds.forEach(pid => {
+              if (s[pid]) {
+                s[pid].matchesPlayed++; s[pid].pointsWon += score; s[pid].pointsLost += oppScore;
+                if (score > oppScore) s[pid].wins++; else s[pid].losses++;
+                s[pid].lastActiveTime = Math.max(s[pid].lastActiveTime, time);
+                
+                const partner = competitionMode === 'individual' ? teamIds.find(i => i !== pid) : null;
+                const opponentsList = opponents.map(id => getPlayerName(id));
+                s[pid].fullSchedule.push({ id: m.id, type: 'finished', round: m.round, partner, opponents: opponentsList, score: `${score}-${oppScore}`, result: score > oppScore ? 'WIN' : 'LOSE', timestamp: time });
+              }
+            });
+          };
+          procTeam(m.teamA, sA, sB, m.teamB);
+          procTeam(m.teamB, sB, sA, m.teamA);
+        });
+
+        Object.keys(activeMatches).forEach(cid => {
+          const m = activeMatches[cid];
+          if (m && m.status === 'playing') {
+            const sA = m.scoreA || 0, sB = m.scoreB || 0;
+            const procActive = (teamIds, score, oppScore, opponents) => {
+               teamIds.forEach(pid => {
+                 if (s[pid]) {
+                    const opponentsList = opponents.map(id => getPlayerName(id));
+                    s[pid].fullSchedule.push({ id: `active-${cid}`, type: 'playing', round: m.round, court: cid, partner: competitionMode === 'individual' ? teamIds.find(i => i !== pid) : null, opponents: opponentsList, score: `${score}-${oppScore}`, timestamp: Date.now() });
+                 }
+               });
+            };
+            procActive(m.teamA, sA, sB, m.teamB);
+            procActive(m.teamB, sB, sA, m.teamA);
+          }
+        });
+
+        scheduledQueue.forEach(m => {
+           const procPending = (teamIds, opponents) => {
+             teamIds.forEach(pid => {
+               if (s[pid]) {
+                 const opponentsList = opponents.map(id => getPlayerName(id));
+                 s[pid].fullSchedule.push({ id: m.id, type: 'pending', round: m.round, partner: competitionMode === 'individual' ? teamIds.find(i => i !== pid) : null, opponents: opponentsList, score: 'vs', timestamp: m.createdAt + 9999999999 });
+               }
+             });
+           };
+           procPending(m.teamA, m.teamB);
+           procPending(m.teamB, m.teamA);
+        });
+
+        Object.values(s).forEach(p => {
+           p.fullSchedule.sort((a, b) => {
+             const order = { 'playing': 0, 'pending': 1, 'finished': 2 };
+             if (order[a.type] !== order[b.type]) return order[a.type] - order[b.type];
+             if (a.type === 'pending') return a.round - b.round;
+             if (a.type === 'finished') return b.timestamp - a.timestamp;
+             return 0;
+           });
+        });
+
+        return Object.values(s).sort((a, b) => (b.pointsWon - a.pointsWon) || (a.pointsLost - b.pointsLost)).map((p, i) => ({ ...p, rank: i + 1 }));
+      }, [matches, players, activeMatches, scheduledQueue, competitionMode]);
+
+      // --- Firebase DB Actions ---
+      const updateMeta = async (k, v) => {
+        if (!user) return;
+        await db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(META_COL).doc('global').update({ [k]: v });
+      };
+
+      const saveSettings = async () => {
+        if (!tempSettingsName.trim() || !user) return;
+        await db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(META_COL).doc('global').update({
+          tournamentName: tempSettingsName.trim(),
+          competitionMode: tempMode
+        });
+        setShowSettingsModal(false);
+      };
+
+      const addPlayer = async () => {
+        if (!newPlayerName.trim() || !user) return;
+        const id = Date.now().toString();
+        await db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(PLAYERS_COL).doc(id).set({ name: newPlayerName.trim(), createdAt: Date.now() });
+        setNewPlayerName("");
+      };
+
+      // 核心：生成全賽事演算法
+      const generateAllMatches = async () => {
+        if (players.length < 4) {
+          setAlertMsg("選手/隊伍人數不足 4 人，無法產生賽程！");
+          return;
+        }
+
+        // 1. 刪除舊賽程
+        const batch1 = db.batch();
+        scheduledQueue.forEach(s => batch1.delete(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(SCHEDULE_COL).doc(s.id)));
+        await batch1.commit();
+
+        const pIds = players.map(p => p.id);
+        const TARGET_MATCHES = matchesPerPlayer;
+        let totalMatchesToGenerate = competitionMode === 'team' ? Math.ceil((pIds.length * TARGET_MATCHES) / 2) : Math.ceil((pIds.length * TARGET_MATCHES) / 4);
+
+        const hist = new Set();
+        const oppGraph = {};
+        const addRec = (p1, p2) => { if (!oppGraph[p1]) oppGraph[p1] = new Set(); if (!oppGraph[p2]) oppGraph[p2] = new Set(); oppGraph[p1].add(p2); oppGraph[p2].add(p1); };
+        
+        const addH = (A, B) => {
+          if (competitionMode === 'individual') {
+            hist.add([...A].sort().join('-')); hist.add([...B].sort().join('-'));
+            addRec(A[0], B[0]); addRec(A[0], B[1]); addRec(A[1], B[0]); addRec(A[1], B[1]);
+          } else {
+            addRec(A[0], B[0]);
+          }
+        };
+        
+        matches.forEach(m => addH(m.teamA, m.teamB));
+        Object.values(activeMatches).forEach(m => { if (m && m.status === 'playing') addH(m.teamA, m.teamB); });
+
+        let sched = [], success = false;
+        for (let attempt = 0; attempt < 100; attempt++) {
+          let tempSched = [], tempH = new Set(hist), playCounts = {}, valid = true;
+          let tempOppGraph = {};
+          Object.keys(oppGraph).forEach(k => tempOppGraph[k] = new Set(oppGraph[k]));
+          pIds.forEach(id => playCounts[id] = 0);
+
+          for (let m = 0; m < totalMatchesToGenerate; m++) {
+            let cands = pIds.filter(id => playCounts[id] < matchesPerPlayer);
+            if (m > 0) {
+              const pm = tempSched[m - 1];
+              cands = cands.filter(id => ![...pm.teamA, ...pm.teamB].includes(id));
+            }
             
-            {/* 排行榜截圖區域 */}
-            <div id="standings-capture" className="bg-white p-6 rounded-3xl shadow-sm border border-yellow-100">
-              <h2 className="text-center text-2xl font-bold mb-1 text-gray-800">{tournamentName}</h2>
-              <p className="text-center text-yellow-600 font-bold mb-6">👑 英雄榜</p>
-              <div className="space-y-3">
-                {stats.map((p, i) => {
-                  let bg = "bg-gray-50", rankIcon = <span className="w-6 text-center font-bold text-gray-400">{i + 1}</span>;
-                  if (i === 0) { bg = "bg-yellow-50 border border-yellow-200"; rankIcon = <Trophy size={20} className="text-yellow-500 mx-auto" />; }
-                  if (i === 1) { bg = "bg-gray-50 border border-gray-300"; rankIcon = <Medal size={20} className="text-gray-400 mx-auto" />; }
-                  if (i === 2) { bg = "bg-orange-50 border border-orange-200"; rankIcon = <Medal size={20} className="text-orange-400 mx-auto" />; }
-                  return (
-                    <div key={p.id} className={`${bg} p-3 rounded-2xl flex justify-between items-center`}>
-                      <div className="flex items-center gap-3">
-                        <div className="w-8">{rankIcon}</div>
-                        <div><div className="font-bold text-gray-800">{p.name}</div><div className="text-xs text-gray-500">{p.wins}勝 {p.losses}敗</div></div>
-                      </div>
-                      <div className="text-right"><div className="font-bold text-teal-600 text-lg">{p.pointsWon} <span className="text-xs font-normal">分</span></div><div className="text-xs text-red-400">失 {p.pointsLost}</div></div>
-                    </div>
-                  )
-                })}
-              </div>
-              <div className="mt-6 text-center text-xs text-gray-300">Generated by Badminton Cloud App</div>
+            const minNeeded = competitionMode === 'team' ? 2 : 4;
+            if (cands.length < minNeeded) { valid = false; break; }
+            
+            let bestM = null, minReps = Infinity;
+            
+            for (let k = 0; k < 30; k++) {
+              const pool = [...cands].sort(() => 0.5 - Math.random());
+              let tA, tB;
+
+              if (competitionMode === 'team') {
+                const p1 = pool[0];
+                let p2Idx = 0;
+                for (let idx = 0; idx < pool.length - 1; idx++) {
+                  const candidate = pool[idx + 1];
+                  if (!(tempOppGraph[p1] && tempOppGraph[p1].has(candidate))) { p2Idx = idx; break; }
+                }
+                tA = [p1]; tB = [pool[1 + p2Idx]];
+              } else {
+                const p1 = pool[0];
+                const p2Idx = pool.slice(1).findIndex(p => !tempH.has([p1, p].sort().join('-')));
+                if (p2Idx === -1) continue;
+                const p2 = pool[1 + p2Idx];
+                const rem = pool.filter(p => p !== p1 && p !== p2);
+                if (rem.length < 2) continue;
+                const p3 = rem[0];
+                const p4Idx = rem.slice(1).findIndex(p => !tempH.has([p3, p].sort().join('-')));
+                if (p4Idx === -1) continue;
+                const p4 = rem[1 + p4Idx];
+                tA = [p1, p2]; tB = [p3, p4];
+              }
+              
+              let r = 0;
+              const checkR = (a, b) => (tempOppGraph[a] && tempOppGraph[a].has(b)) ? 1 : 0;
+              if (competitionMode === 'team') {
+                r = checkR(tA[0], tB[0]);
+              } else {
+                r = checkR(tA[0], tB[0]) + checkR(tA[0], tB[1]) + checkR(tA[1], tB[0]) + checkR(tA[1], tB[1]);
+              }
+              
+              if (r === 0) { bestM = { teamA: tA, teamB: tB }; break; }
+              if (r < minReps) { minReps = r; bestM = { teamA: tA, teamB: tB }; }
+            }
+            
+            if (bestM) {
+              tempSched.push(bestM);
+              if (competitionMode === 'individual') {
+                tempH.add([...bestM.teamA].sort().join('-')); tempH.add([...bestM.teamB].sort().join('-'));
+                const addTO = (a, b) => { if (!tempOppGraph[a]) tempOppGraph[a] = new Set(); if (!tempOppGraph[b]) tempOppGraph[b] = new Set(); tempOppGraph[a].add(b); tempOppGraph[b].add(a); };
+                addTO(bestM.teamA[0], bestM.teamB[0]); addTO(bestM.teamA[0], bestM.teamB[1]); addTO(bestM.teamA[1], bestM.teamB[0]); addTO(bestM.teamA[1], bestM.teamB[1]);
+              } else {
+                const addTO = (a, b) => { if (!tempOppGraph[a]) tempOppGraph[a] = new Set(); if (!tempOppGraph[b]) tempOppGraph[b] = new Set(); tempOppGraph[a].add(b); tempOppGraph[b].add(a); };
+                addTO(bestM.teamA[0], bestM.teamB[0]);
+              }
+              [...bestM.teamA, ...bestM.teamB].forEach(p => playCounts[p]++);
+            } else { valid = false; break; }
+          }
+          if (valid) { sched = tempSched; success = true; break; }
+        }
+
+        if (!success) {
+          setAlertMsg("無法生成完美不重複賽程，請調整條件！");
+          return;
+        }
+
+        // Write new schedule
+        const batch2 = db.batch();
+        sched.forEach((m, i) => {
+          const ref = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(SCHEDULE_COL).doc();
+          const div = competitionMode === 'team' ? 2 : 4;
+          const rNum = Math.floor(i / (players.length / div)) + 1;
+          batch2.set(ref, { teamA: m.teamA, teamB: m.teamB, round: rNum, createdAt: Date.now() + i, status: 'pending' });
+        });
+        if (matches.length === 0) batch2.update(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(META_COL).doc('global'), { currentRound: 1 });
+        await batch2.commit();
+      };
+
+      const dispatchMatchToCourt = async (matchId, courtId) => {
+        if (!user) return;
+        const m = scheduledQueue.find(x => x.id === matchId);
+        if (!m) return;
+        if ([...m.teamA, ...m.teamB].some(id => getBusyPlayerIds().includes(id))) {
+          setAlertMsg("選手忙碌中，無法派發！");
+          return;
+        }
+        
+        const batch = db.batch();
+        batch.set(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(COURTS_COL).doc(courtId.toString()), {
+          ...m, scoreA: '', scoreB: '', status: 'playing', startTime: Date.now()
+        });
+        batch.delete(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(SCHEDULE_COL).doc(matchId));
+        await batch.commit();
+        setActiveTab('courts');
+      };
+
+      // 確定完成比賽並登記成績
+      const confirmFinishMatch = async () => {
+        if (!user || !finishConfirmData) return;
+        const { courtId, match } = finishConfirmData;
+        const finalScoreA = match.scoreA === '' ? 0 : match.scoreA;
+        const finalScoreB = match.scoreB === '' ? 0 : match.scoreB;
+
+        const batch = db.batch();
+        batch.set(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(MATCHES_COL).doc(), {
+          ...match,
+          scoreA: finalScoreA,
+          scoreB: finalScoreB,
+          timestampRaw: Date.now(),
+          timestamp: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })
+        });
+        batch.delete(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(COURTS_COL).doc(courtId.toString()));
+        await batch.commit();
+        setFinishConfirmData(null);
+      };
+
+      const deleteAllHistory = async () => {
+        if (!user) return;
+        const batch = db.batch();
+        matches.forEach(m => batch.delete(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(MATCHES_COL).doc(m.id)));
+        scheduledQueue.forEach(s => batch.delete(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(SCHEDULE_COL).doc(s.id)));
+        batch.update(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(META_COL).doc('global'), { currentRound: 1 });
+        await batch.commit();
+      };
+
+      const saveToArchives = async () => {
+        if (!user) return;
+        const snap = stats.map((p, i) => ({ rank: i + 1, id: p.id, name: p.name, wins: p.wins, losses: p.losses, pointsWon: p.pointsWon, pointsLost: p.pointsLost }));
+        await db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(ARCHIVES_COL).add({
+          tournamentName, createdAt: Date.now(), dateStr: new Date().toLocaleDateString('zh-TW'), standings: snap
+        });
+        setAlertMsg("英雄榜已成功封存！");
+      };
+
+      const downloadImage = async () => {
+        setIsExporting(true);
+        try {
+          const el = document.getElementById('standings-capture');
+          if (!el) throw new Error("找不到截圖元素");
+          const cvs = await window.html2canvas(el, { backgroundColor: '#fffbeb', scale: 2 });
+          const a = document.createElement('a');
+          a.download = tournamentName + "_英雄榜.png";
+          a.href = cvs.toDataURL();
+          a.click();
+        } catch (e) {
+          setAlertMsg("截圖下載失敗");
+        } finally {
+          setIsExporting(false);
+        }
+      };
+
+      // --- Court Manual Setup ---
+      const toggleSel = (pid, team) => {
+        const busy = getBusyPlayerIds(); if (busy.includes(pid)) return;
+        const limit = competitionMode === 'team' ? 1 : 2;
+        if (team === 'A') {
+          if (tempTeamA.includes(pid)) setTempTeamA(tempTeamA.filter(i => i !== pid));
+          else {
+            if (tempTeamB.includes(pid)) setTempTeamB(tempTeamB.filter(i => i !== pid));
+            if (tempTeamA.length < limit) setTempTeamA([...tempTeamA, pid]);
+          }
+        } else {
+          if (tempTeamB.includes(pid)) setTempTeamB(tempTeamB.filter(i => i !== pid));
+          else {
+            if (tempTeamA.includes(pid)) setTempTeamA(tempTeamA.filter(i => i !== pid));
+            if (tempTeamB.length < limit) setTempTeamB([...tempTeamB, pid]);
+          }
+        }
+      };
+
+      const startManualMatch = async () => {
+        if (!user) return;
+        const limit = competitionMode === 'team' ? 1 : 2;
+        if (tempTeamA.length !== limit || tempTeamB.length !== limit) return;
+
+        await db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(COURTS_COL).doc(setupCourtId.toString()).set({
+          teamA: tempTeamA, teamB: tempTeamB, scoreA: '', scoreB: '', status: 'playing', round: currentRound, startTime: Date.now()
+        });
+        setShowSetupModal(false);
+      };
+
+      // --- Rendering ---
+      if (loading) {
+        return (
+          <div className="min-h-screen flex items-center justify-center bg-amber-50 text-teal-600 font-bold gap-2">
+            <span className="animate-spin text-2xl">⚡</span> 連線至雲端中...
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen bg-amber-50 font-sans text-gray-800 pb-24">
+          {/* 頂部標題 */}
+          <div className="bg-gradient-to-br from-teal-400 to-emerald-500 text-white p-6 rounded-b-[3rem] shadow-lg mb-6 relative">
+            <div className="absolute top-4 right-4 text-xs bg-black/20 px-2 py-1 rounded-full flex items-center gap-1">
+              {user ? <><Icons.Wifi/> 同步中</> : <><Icons.WifiOff/> 離線</>}
+            </div>
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <h1 className="text-2xl font-bold cursor-pointer" onClick={() => { setTempSettingsName(tournamentName); setTempMode(competitionMode); setShowSettingsModal(true); }}>{tournamentName}</h1>
+              <button onClick={() => { setTempSettingsName(tournamentName); setTempMode(competitionMode); setShowSettingsModal(true); }} className="opacity-50 hover:opacity-100"><Icons.Settings/></button>
+            </div>
+            <div className="flex justify-center text-sm gap-4 opacity-90">
+              <span className="bg-white/20 px-2 py-1 rounded-full">第 {currentRound} 輪</span>
+              <span className="bg-white/20 px-2 py-1 rounded-full">{courtCount} 場地</span>
+              <span className="bg-white/20 px-2 py-1 rounded-full">{players.length} {competitionMode === 'team' ? '隊伍' : '選手'}</span>
             </div>
           </div>
-        )}
 
-        {/* 6. 清除 (歷史) */}
-        {activeTab === 'history' && (
-          <div className="space-y-4">
-            <div className="flex justify-between items-center px-2">
-              <span className="text-sm text-gray-400 font-bold">共 {matches.length} 筆記錄</span>
-              {matches.length > 0 && <button onClick={() => setConfirmDialog({ message: "⚠ 警告：確定要清空所有比賽紀錄及排程嗎？(名單會保留)", onConfirm: deleteAllHistory })} className="text-red-500 bg-red-100 hover:bg-red-200 px-4 py-2 rounded-full text-xs font-bold transition-colors flex items-center gap-1"><Trash2 size={14}/> 全部清除</button>}
-            </div>
-            {matches.map(m => (
-              <div key={m.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 relative group">
-                <div className="flex justify-between text-xs text-gray-400 mb-3"><span>R{m.round} - 場地 {m.court}</span><span>{m.timestamp}</span></div>
-                <div className="flex justify-between items-center font-bold text-gray-800">
-                  <div className="text-center w-1/2 border-r border-gray-100 pr-2">
-                    <div className="truncate">{getPlayerName(m.teamA[0])}</div>
-                    {competitionMode === 'individual' && m.teamA[1] && <div className="truncate">{getPlayerName(m.teamA[1])}</div>}
-                    <div className="text-2xl text-teal-600 mt-2">{m.scoreA}</div>
-                  </div>
-                  <div className="text-gray-200 px-2">-</div>
-                  <div className="text-center w-1/2 pl-2">
-                    <div className="truncate">{getPlayerName(m.teamB[0])}</div>
-                    {competitionMode === 'individual' && m.teamB[1] && <div className="truncate">{getPlayerName(m.teamB[1])}</div>}
-                    <div className="text-2xl text-teal-600 mt-2">{m.scoreB}</div>
-                  </div>
-                </div>
-                <button onClick={() => setConfirmDialog({ message: "確定刪除這筆成績？", onConfirm: async () => await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', MATCHES_COL, m.id)) })} className="absolute top-2 right-2 text-gray-300 hover:text-red-500 p-2"><Trash2 size={16}/></button>
-              </div>
+          {/* 6格導覽列 (3x2) */}
+          <div className="grid grid-cols-3 gap-2 mb-6 px-4">
+            {[
+              { id: 'players', icon: <Icons.Users/>, label: competitionMode === 'team' ? '隊伍' : '人員', color: 'text-pink-500' },
+              { id: 'schedule', icon: <Icons.Calendar/>, label: '賽程', color: 'text-green-600' },
+              { id: 'courts', icon: <Icons.Activity/>, label: '場地', color: 'text-blue-500' },
+              { id: 'racing', icon: <Icons.BarChart2/>, label: '即時成績', color: 'text-orange-500' },
+              { id: 'standings', icon: <Icons.Trophy/>, label: '英雄榜', color: 'text-yellow-600' },
+              { id: 'history', icon: <Icons.History/>, label: '清除', color: 'text-purple-500' },
+            ].map(t => (
+              <button
+                key={t.id}
+                onClick={() => setActiveTab(t.id)}
+                className={`flex items-center justify-center gap-1 py-3 rounded-xl text-xs font-bold transition-all ${activeTab === t.id ? 'bg-white shadow-md scale-105 ' + t.color : 'bg-white/40 text-gray-400 hover:bg-white/60'}`}
+              >
+                {t.icon} {t.label}
+              </button>
             ))}
           </div>
-        )}
-      </div>
 
-      {/* --- 共用彈出視窗區域 --- */}
-      
-      {/* 1. 手動建賽 */}
-      {showSetupModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl max-h-[80vh] overflow-y-auto">
-            <h3 className="text-xl font-bold text-center mb-6 text-gray-800">設定 {setupCourtId} 號場地</h3>
-            
-            <div className="mb-4">
-              <div className="flex justify-between mb-2"><span className="font-bold text-sm text-gray-500">A 隊 ({tempTeamA.length}/{competitionMode === 'team' ? 1 : 2})</span></div>
-              <div className="grid grid-cols-3 gap-2">
-                {players.map(p => <button key={p.id} disabled={getBusyPlayerIds().includes(p.id) || tempTeamB.includes(p.id)} onClick={() => toggleSel(p.id, 'A')} className={`text-xs py-2 rounded-lg truncate transition-colors ${tempTeamA.includes(p.id) ? 'bg-teal-500 text-white font-bold' : (getBusyPlayerIds().includes(p.id) || tempTeamB.includes(p.id) ? 'bg-gray-100 text-gray-300 cursor-not-allowed' : 'bg-gray-50 hover:bg-teal-50 text-gray-700')}`}>{p.name}</button>)}
+          {/* 主要內容區 */}
+          <div className="px-4 max-w-md mx-auto">
+
+            {/* 1. 人員 / 隊伍管理 */}
+            {activeTab === 'players' && (
+              <div className="bg-white p-5 rounded-3xl shadow-sm border border-pink-100">
+                <h2 className="text-xl font-bold text-pink-600 mb-4 flex items-center gap-2"><Icons.Users/> {competitionMode === 'team' ? '隊伍' : '選手'}管理</h2>
+                <div className="flex gap-2 mb-6">
+                  <input type="text" value={newPlayerName} onChange={e => setNewPlayerName(e.target.value)} placeholder={`輸入${competitionMode === 'team' ? '隊名' : '姓名'}...`}
+                    className="flex-1 border-2 border-pink-100 rounded-xl px-4 py-2 outline-none focus:border-pink-400"
+                    onKeyDown={e => e.key === 'Enter' && addPlayer()} />
+                  <button onClick={addPlayer} className="bg-pink-500 text-white p-3 rounded-xl shadow active:scale-95"><Icons.UserPlus/></button>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  {players.map(p => (
+                    <div key={p.id} className="bg-pink-50 p-3 rounded-xl flex justify-between items-center group">
+                      <span className="font-bold text-gray-700 truncate">{p.name}</span>
+                      <button onClick={() => setConfirmDialog({ message: `確定刪除 ${p.name} 嗎？`, onConfirm: () => deletePlayer(p.id) })} className="text-pink-300 hover:text-red-500"><Icons.X/></button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 2. 賽程表 */}
+            {activeTab === 'schedule' && (
+              <div className="space-y-4">
+                <div className="bg-white p-5 rounded-3xl shadow-sm border border-green-100">
+                  <div className="flex justify-between mb-4 border-b border-gray-100 pb-4">
+                    <div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-500">場地數</span><button onClick={() => updateMeta('courtCount', Math.max(1, courtCount - 1))} className="p-1 hover:bg-gray-100 rounded"><Icons.Minus/></button><span className="font-black text-blue-600 w-4 text-center">{courtCount}</span><button onClick={() => updateMeta('courtCount', Math.min(10, courtCount + 1))} className="p-1 hover:bg-gray-100 rounded"><Icons.Plus/></button></div>
+                    <div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-500">每人場數</span><button onClick={() => updateMeta('matchesPerPlayer', Math.max(1, matchesPerPlayer - 1))} className="p-1 hover:bg-gray-100 rounded"><Icons.Minus/></button><span className="font-black text-green-600 w-4 text-center">{matchesPerPlayer}</span><button onClick={() => updateMeta('matchesPerPlayer', Math.min(10, matchesPerPlayer + 1))} className="p-1 hover:bg-gray-100 rounded"><Icons.Plus/></button></div>
+                  </div>
+
+                  <button onClick={() => setConfirmDialog({ message: "這將清除目前待打賽程，重新產生組合，確定嗎？", onConfirm: generateAllMatches })} className="w-full py-3 bg-purple-500 hover:bg-purple-600 text-white rounded-xl font-bold shadow flex justify-center items-center gap-2 transition-all active:scale-95"><Icons.Activity/> 生成全賽事</button>
+                  {scheduledQueue.length > 0 && <button onClick={() => setConfirmDialog({ message: "確定要清空賽程表嗎？", onConfirm: async () => { const batch = db.batch(); scheduledQueue.forEach(s => batch.delete(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(SCHEDULE_COL).doc(s.id))); await batch.commit(); } })} className="w-full mt-2 py-2 bg-red-100 hover:bg-red-200 text-red-600 rounded-xl font-bold flex justify-center gap-2 text-sm transition-colors"><Icons.Trash2/> 清空賽程</button>}
+                </div>
+
+                {scheduledQueue.map((m, i) => {
+                  const busy = [...m.teamA, ...m.teamB].some(id => getBusyPlayerIds().includes(id));
+                  return (
+                    <div key={m.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200">
+                      <div className="flex justify-between mb-3 text-xs text-gray-500"><span className="bg-gray-100 px-2 py-1 rounded font-bold">R{m.round} - 第 {i + 1} 場</span>{busy && <span className="text-red-400 flex items-center gap-1 font-bold"><Icons.AlertCircle/> 等候中</span>}</div>
+                      <div className="flex justify-between font-bold text-gray-800 mb-4">
+                        <div className="w-1/2 text-center border-r border-gray-100">
+                          <div className="truncate">{getPlayerName(m.teamA[0])}</div>
+                          {competitionMode === 'individual' && m.teamA[1] && <div className="truncate">{getPlayerName(m.teamA[1])}</div>}
+                        </div>
+                        <div className="text-gray-300 px-2">VS</div>
+                        <div className="w-1/2 text-center">
+                          <div className="truncate">{getPlayerName(m.teamB[0])}</div>
+                          {competitionMode === 'individual' && m.teamB[1] && <div className="truncate">{getPlayerName(m.teamB[1])}</div>}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {Array.from({ length: courtCount }).map((_, k) => (
+                          <button key={k} disabled={busy || activeMatches[k + 1]?.status === 'playing'} onClick={() => dispatchMatchToCourt(m.id, k + 1)} className={`py-2 rounded-lg font-bold text-sm transition-colors flex items-center justify-center gap-1 ${busy || activeMatches[k + 1]?.status === 'playing' ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : (k % 2 ? 'bg-blue-100 text-blue-600 hover:bg-blue-200' : 'bg-pink-100 text-pink-600 hover:bg-pink-200')}`}><Icons.ArrowRightCircle/> {k + 1} 場</button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* 3. 比賽場地 */}
+            {activeTab === 'courts' && (
+              <div>
+                {Array.from({ length: courtCount }).map((_, i) => (
+                  <CourtCard
+                    key={i + 1}
+                    courtId={i + 1}
+                    colorTheme={i % 2 === 0 ? "pink" : "blue"}
+                    activeMatches={activeMatches}
+                    onUpdateScore={(cid, f, v) => {
+                      const val = v === '' ? '' : parseInt(v);
+                      if (val !== '' && isNaN(val)) return;
+                      db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(COURTS_COL).doc(cid.toString()).update({ [f]: val });
+                    }}
+                    onSetup={(id) => { setSetupCourtId(id); setTempTeamA([]); setTempTeamB([]); setShowSetupModal(true); }}
+                    onRequestFinish={(id) => {
+                      const match = activeMatches[id];
+                      if (!match) return;
+                      setFinishConfirmData({ courtId: id, match });
+                    }}
+                    onCancelMatch={(id) => {
+                      setConfirmDialog({
+                        message: `確定取消這場比賽嗎？成績將不會保留。`,
+                        onConfirm: () => db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(COURTS_COL).doc(id.toString()).delete()
+                      });
+                    }}
+                    getPlayerName={getPlayerName}
+                    competitionMode={competitionMode}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* 4. 即時成績 */}
+            {activeTab === 'racing' && (
+              <div className="space-y-4">
+                {[...stats].sort((a, b) => b.lastActiveTime - a.lastActiveTime).map(p => (
+                  <div key={p.id} className="bg-white p-4 rounded-3xl shadow-sm border border-gray-100">
+                    <div className="flex justify-between items-center mb-3 border-b border-gray-100 pb-2">
+                      <div>
+                        <h3 className="font-bold text-gray-800 text-lg">{p.name}</h3>
+                        <div className="text-xs text-gray-400 mt-1">{p.wins}勝 {p.losses}敗 / 得 {p.pointsWon} 失 {p.pointsLost}</div>
+                      </div>
+                      <div className="text-3xl font-black text-gray-200">#{p.rank}</div>
+                    </div>
+                    <div className="space-y-2">
+                      {p.fullSchedule.length === 0 ? <div className="text-center text-xs text-gray-300 py-2">尚無賽程</div> : p.fullSchedule.map((m, i) => {
+                        let color = "bg-gray-50 border-gray-100", label = "待";
+                        if (m.type === 'finished') { color = m.result === 'WIN' ? "bg-green-50 border-green-100 text-green-700" : "bg-red-50 border-red-100 text-red-700"; label = m.result; }
+                        if (m.type === 'playing') { color = "bg-blue-50 border-blue-200 text-blue-700 animate-pulse"; label = "戰"; }
+                        const partner = m.partner ? getPlayerName(m.partner) : '';
+                        const opps = m.opponents.join(" / ");
+                        return (
+                          <div key={i} className={`flex items-center text-xs p-2 rounded-lg border ${color}`}>
+                            <div className="w-8 font-bold text-center mr-2">{label}</div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex justify-between items-center font-bold text-gray-700">
+                                <span className="truncate mr-2">vs {opps}</span>
+                                <span className="whitespace-nowrap">{m.score} <span className="font-normal text-gray-400">{partner ? `(${partner})` : ''}</span></span>
+                              </div>
+                              {(m.type === 'playing' || m.type === 'pending') && <div className="text-right text-[10px] text-gray-400 mt-1">{m.type === 'playing' ? `📍 ${m.court}號場` : `📅 R${m.round}`}</div>}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* 5. 英雄榜 */}
+            {activeTab === 'standings' && (
+              <div className="space-y-3">
+                <div className="flex justify-end gap-2 mb-2">
+                  <button onClick={() => setShowArchivesModal(true)} className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-2 rounded-xl shadow-sm text-sm font-bold flex items-center gap-1 transition-colors"><Icons.Archive/> 歷年成績</button>
+                  <button onClick={() => setConfirmDialog({ message: "確定要將目前的排行榜封存到歷年成績中嗎？", onConfirm: saveToArchives })} className="bg-green-500 hover:bg-green-600 text-white px-3 py-2 rounded-xl shadow-sm text-sm font-bold flex items-center gap-1 transition-colors"><Icons.Save/> 封存本次</button>
+                  <button onClick={downloadImage} disabled={isExporting} className="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-2 rounded-xl shadow-sm text-sm font-bold flex items-center gap-1 transition-colors disabled:opacity-50">
+                    {isExporting ? "處理中..." : <Icons.Download/>} 截圖
+                  </button>
+                </div>
+                
+                {/* 排行榜截圖區域 */}
+                <div id="standings-capture" className="bg-white p-6 rounded-3xl shadow-sm border border-yellow-100">
+                  <h2 className="text-center text-2xl font-bold mb-1 text-gray-800">{tournamentName}</h2>
+                  <p className="text-center text-yellow-600 font-bold mb-6">👑 英雄榜</p>
+                  <div className="space-y-3">
+                    {stats.map((p, i) => {
+                      let bg = "bg-gray-50", rankIcon = <span className="w-6 text-center font-bold text-gray-400">{i + 1}</span>;
+                      if (i === 0) { bg = "bg-yellow-50 border border-yellow-200"; rankIcon = <Icons.Trophy/>; }
+                      if (i === 1) { bg = "bg-gray-50 border border-gray-300"; rankIcon = <Icons.Medal/>; }
+                      if (i === 2) { bg = "bg-orange-50 border border-orange-200"; rankIcon = <Icons.Medal/>; }
+                      return (
+                        <div key={p.id} className={`${bg} p-3 rounded-2xl flex justify-between items-center`}>
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 text-xl flex justify-center">{rankIcon}</div>
+                            <div><div className="font-bold text-gray-800">{p.name}</div><div className="text-xs text-gray-500">{p.wins}勝 {p.losses}敗</div></div>
+                          </div>
+                          <div className="text-right"><div className="font-bold text-teal-600 text-lg">{p.pointsWon} <span className="text-xs font-normal">分</span></div><div className="text-xs text-red-400">失 {p.pointsLost}</div></div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <div className="mt-6 text-center text-xs text-gray-300">Generated by Badminton Cloud App</div>
+                </div>
+              </div>
+            )}
+
+            {/* 6. 清除 (歷史) */}
+            {activeTab === 'history' && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center px-2">
+                  <span className="text-sm text-gray-400 font-bold">共 {matches.length} 筆記錄</span>
+                  {matches.length > 0 && <button onClick={() => setConfirmDialog({ message: "⚠ 警告：確定要清空所有比賽紀錄及排程嗎？(名單會保留)", onConfirm: deleteAllHistory })} className="text-red-500 bg-red-100 hover:bg-red-200 px-4 py-2 rounded-full text-xs font-bold transition-colors flex items-center gap-1"><Icons.Trash2/> 全部清除</button>}
+                </div>
+                {matches.map(m => (
+                  <div key={m.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 relative group">
+                    <div className="flex justify-between text-xs text-gray-400 mb-3"><span>R{m.round} - 場地 {m.court}</span><span>{m.timestamp}</span></div>
+                    <div className="flex justify-between items-center font-bold text-gray-800">
+                      <div className="text-center w-1/2 border-r border-gray-100 pr-2">
+                        <div className="truncate">{getPlayerName(m.teamA[0])}</div>
+                        {competitionMode === 'individual' && m.teamA[1] && <div className="truncate">{getPlayerName(m.teamA[1])}</div>}
+                        <div className="text-2xl text-teal-600 mt-2">{m.scoreA}</div>
+                      </div>
+                      <div className="text-gray-200 px-2">-</div>
+                      <div className="text-center w-1/2 pl-2">
+                        <div className="truncate">{getPlayerName(m.teamB[0])}</div>
+                        {competitionMode === 'individual' && m.teamB[1] && <div className="truncate">{getPlayerName(m.teamB[1])}</div>}
+                        <div className="text-2xl text-teal-600 mt-2">{m.scoreB}</div>
+                      </div>
+                    </div>
+                    <button onClick={() => setConfirmDialog({ message: "確定刪除這筆成績？", onConfirm: async () => await db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(MATCHES_COL).doc(m.id).delete() })} className="absolute top-2 right-2 text-gray-300 hover:text-red-500 p-2"><Icons.Trash2/></button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* --- 共用彈出視窗區域 --- */}
+          
+          {/* 1. 手動建賽 */}
+          {showSetupModal && (
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl max-h-[80vh] overflow-y-auto">
+                <h3 className="text-xl font-bold text-center mb-6 text-gray-800">設定 {setupCourtId} 號場地</h3>
+                
+                <div className="mb-4">
+                  <div className="flex justify-between mb-2"><span className="font-bold text-sm text-gray-500">A 隊 ({tempTeamA.length}/{competitionMode === 'team' ? 1 : 2})</span></div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {players.map(p => <button key={p.id} disabled={getBusyPlayerIds().includes(p.id) || tempTeamB.includes(p.id)} onClick={() => toggleSel(p.id, 'A')} className={`text-xs py-2 rounded-lg truncate transition-colors ${tempTeamA.includes(p.id) ? 'bg-teal-500 text-white font-bold' : (getBusyPlayerIds().includes(p.id) || tempTeamB.includes(p.id) ? 'bg-gray-100 text-gray-300 cursor-not-allowed' : 'bg-gray-50 hover:bg-teal-50 text-gray-700')}`}>{p.name}</button>)}
+                  </div>
+                </div>
+                
+                <div className="mb-8">
+                  <div className="flex justify-between mb-2"><span className="font-bold text-sm text-gray-500">B 隊 ({tempTeamB.length}/{competitionMode === 'team' ? 1 : 2})</span></div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {players.map(p => <button key={p.id} disabled={getBusyPlayerIds().includes(p.id) || tempTeamA.includes(p.id)} onClick={() => toggleSel(p.id, 'B')} className={`text-xs py-2 rounded-lg truncate transition-colors ${tempTeamB.includes(p.id) ? 'bg-orange-500 text-white font-bold' : (getBusyPlayerIds().includes(p.id) || tempTeamA.includes(p.id) ? 'bg-gray-100 text-gray-300 cursor-not-allowed' : 'bg-gray-50 hover:bg-orange-50 text-gray-700')}`}>{p.name}</button>)}
+                  </div>
+                </div>
+                
+                <button onClick={startManualMatch} className="w-full py-3 bg-gray-800 hover:bg-black text-white rounded-xl font-bold transition-colors">開始比賽</button>
+                <button onClick={closeSetupModal} className="w-full mt-2 text-gray-500 py-3 font-bold hover:bg-gray-50 rounded-xl">取消</button>
               </div>
             </div>
-            
-            <div className="mb-8">
-              <div className="flex justify-between mb-2"><span className="font-bold text-sm text-gray-500">B 隊 ({tempTeamB.length}/{competitionMode === 'team' ? 1 : 2})</span></div>
-              <div className="grid grid-cols-3 gap-2">
-                {players.map(p => <button key={p.id} disabled={getBusyPlayerIds().includes(p.id) || tempTeamA.includes(p.id)} onClick={() => toggleSel(p.id, 'B')} className={`text-xs py-2 rounded-lg truncate transition-colors ${tempTeamB.includes(p.id) ? 'bg-orange-500 text-white font-bold' : (getBusyPlayerIds().includes(p.id) || tempTeamA.includes(p.id) ? 'bg-gray-100 text-gray-300 cursor-not-allowed' : 'bg-gray-50 hover:bg-orange-50 text-gray-700')}`}>{p.name}</button>)}
+          )}
+
+          {/* 2. 系統設定 */}
+          {showSettingsModal && (
+            <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl">
+                <h3 className="text-xl font-bold mb-4 flex items-center gap-2 text-gray-800"><Icons.Settings/> 比賽設定</h3>
+                <div className="mb-5">
+                  <label className="block text-sm font-bold text-gray-500 mb-2">比賽名稱</label>
+                  <input type="text" value={tempSettingsName} onChange={e => setTempSettingsName(e.target.value)} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2 outline-none focus:border-teal-400 transition-colors"/>
+                </div>
+                <div className="mb-8">
+                   <label className="block text-sm font-bold text-gray-500 mb-2">比賽模式</label>
+                   <div className="flex gap-2 bg-gray-100 p-1 rounded-xl">
+                      <button onClick={() => setTempMode('individual')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${tempMode === 'individual' ? 'bg-white shadow text-teal-600' : 'text-gray-400'}`}>個人 (2v2)</button>
+                      <button onClick={() => setTempMode('team')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${tempMode === 'team' ? 'bg-white shadow text-teal-600' : 'text-gray-400'}`}>隊伍 (1v1)</button>
+                   </div>
+                   <p className="text-xs text-gray-400 mt-2 ml-1">{tempMode === 'individual' ? '人員隨機搭配成雙打，計算個人積分。' : '隊伍或單打對抗，計算單一單位積分。'}</p>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => setShowSettingsModal(false)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl font-bold transition-colors">取消</button>
+                  <button onClick={saveSettings} className="flex-1 py-3 bg-teal-500 hover:bg-teal-600 text-white rounded-xl font-bold transition-colors">儲存設定</button>
+                </div>
               </div>
             </div>
-            
-            <button onClick={startManualMatch} className="w-full py-3 bg-gray-800 hover:bg-black text-white rounded-xl font-bold transition-colors">開始比賽</button>
-            <button onClick={closeSetupModal} className="w-full mt-2 text-gray-500 py-3 font-bold hover:bg-gray-50 rounded-xl">取消</button>
-          </div>
-        </div>
-      )}
+          )}
 
-      {/* 2. 系統設定 */}
-      {showSettingsModal && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl">
-            <h3 className="text-xl font-bold mb-4 flex items-center gap-2 text-gray-800"><Settings size={20}/> 比賽設定</h3>
-            <div className="mb-5">
-              <label className="block text-sm font-bold text-gray-500 mb-2">比賽名稱</label>
-              <input type="text" value={tempSettingsName} onChange={e => setTempSettingsName(e.target.value)} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2 outline-none focus:border-teal-400 transition-colors"/>
-            </div>
-            <div className="mb-8">
-               <label className="block text-sm font-bold text-gray-500 mb-2">比賽模式</label>
-               <div className="flex gap-2 bg-gray-100 p-1 rounded-xl">
-                  <button onClick={() => setTempMode('individual')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${tempMode === 'individual' ? 'bg-white shadow text-teal-600' : 'text-gray-400'}`}>個人 (2v2)</button>
-                  <button onClick={() => setTempMode('team')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${tempMode === 'team' ? 'bg-white shadow text-teal-600' : 'text-gray-400'}`}>隊伍 (1v1)</button>
-               </div>
-               <p className="text-xs text-gray-400 mt-2 ml-1">{tempMode === 'individual' ? '人員隨機搭配成雙打，計算個人積分。' : '隊伍或單打對抗，計算單一單位積分。'}</p>
-            </div>
-            <div className="flex gap-3">
-              <button onClick={() => setShowSettingsModal(false)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl font-bold transition-colors">取消</button>
-              <button onClick={saveSettings} className="flex-1 py-3 bg-teal-500 hover:bg-teal-600 text-white rounded-xl font-bold transition-colors">儲存設定</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 3. 歷年成績 */}
-      {showArchivesModal && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl max-h-[80vh] overflow-y-auto">
-             {selectedArchive ? (
-               <div>
-                 <button onClick={() => setSelectedArchive(null)} className="mb-4 text-gray-500 hover:text-gray-800 font-bold flex items-center gap-1 transition-colors"><ChevronLeft size={18}/> 返回列表</button>
-                 <div className="text-center mb-6">
-                   <h2 className="text-2xl font-bold text-gray-800">{selectedArchive.tournamentName}</h2>
-                   <span className="text-xs text-gray-400">{selectedArchive.dateStr}</span>
-                 </div>
-                 <div className="space-y-2">
-                   {selectedArchive.standings.map((p, i) => (
-                     <div key={i} className="flex justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
-                       <span className="font-bold w-6 text-center text-gray-400">{p.rank}</span>
-                       <span className="flex-1 font-bold text-gray-800">{p.name}</span>
-                       <span className="text-gray-500 text-sm font-bold">{p.wins}W {p.losses}L</span>
+          {/* 3. 歷年成績 */}
+          {showArchivesModal && (
+            <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl max-h-[80vh] overflow-y-auto">
+                 {selectedArchive ? (
+                   <div>
+                     <button onClick={() => setSelectedArchive(null)} className="mb-4 text-gray-500 hover:text-gray-800 font-bold flex items-center gap-1 transition-colors"><Icons.ChevronLeft/> 返回列表</button>
+                     <div className="text-center mb-6">
+                       <h2 className="text-2xl font-bold text-gray-800">{selectedArchive.tournamentName}</h2>
+                       <span className="text-xs text-gray-400">{selectedArchive.dateStr}</span>
                      </div>
-                   ))}
-                 </div>
-               </div>
-             ) : (
-               <div>
-                 <div className="flex justify-between items-center mb-6">
-                   <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2"><History size={20}/> 歷年封存成績</h3>
-                   <button onClick={() => setShowArchivesModal(false)} className="p-2 bg-gray-100 hover:bg-gray-200 rounded-full transition-colors"><X size={16}/></button>
-                 </div>
-                 <div className="space-y-3">
-                   {archives.length === 0 ? <div className="text-center text-gray-400 py-6">尚無任何封存紀錄</div> : archives.map(a => (
-                     <div key={a.id} onClick={() => setSelectedArchive(a)} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex justify-between items-center cursor-pointer hover:border-teal-300 transition-colors">
-                       <div><div className="font-bold text-gray-800">{a.tournamentName}</div><div className="text-xs text-gray-400 mt-1">{a.dateStr}</div></div>
-                       <button onClick={(e) => { e.stopPropagation(); setConfirmDialog({ message: "確定永久刪除這筆歷史存檔嗎？", onConfirm: async () => await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', ARCHIVES_COL, a.id)) }); }} className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"><Trash2 size={18}/></button>
+                     <div className="space-y-2">
+                       {selectedArchive.standings.map((p, i) => (
+                         <div key={i} className="flex justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
+                           <span className="font-bold w-6 text-center text-gray-400">{p.rank}</span>
+                           <span className="flex-1 font-bold text-gray-800">{p.name}</span>
+                           <span className="text-gray-500 text-sm font-bold">{p.wins}W {p.losses}L</span>
+                         </div>
+                       ))}
                      </div>
-                   ))}
-                 </div>
-               </div>
-             )}
-          </div>
-        </div>
-      )}
-
-      {/* 4. 自訂 Alert 警告視窗 */}
-      {alertMsg && (
-        <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl text-center">
-            <div className="mx-auto w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center mb-4"><AlertCircle className="text-yellow-500"/></div>
-            <p className="text-gray-800 font-bold mb-6">{alertMsg}</p>
-            <button onClick={() => setAlertMsg("")} className="w-full py-3 bg-gray-800 text-white rounded-xl font-bold">了解</button>
-          </div>
-        </div>
-      )}
-
-      {/* 5. 自訂 Confirm 確認視窗 */}
-      {confirmDialog && (
-        <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center">
-            <div className="mx-auto w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mb-4"><AlertCircle className="text-red-500"/></div>
-            <p className="text-gray-800 font-bold mb-6 whitespace-pre-wrap leading-relaxed">{confirmDialog.message}</p>
-            <div className="flex gap-3">
-              <button onClick={() => setConfirmDialog(null)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-bold transition-colors">取消</button>
-              <button onClick={() => { confirmDialog.onConfirm(); setConfirmDialog(null); }} className="flex-1 py-3 bg-red-500 hover:bg-red-600 text-white rounded-xl font-bold transition-colors">確定</button>
+                   </div>
+                 ) : (
+                   <div>
+                     <div className="flex justify-between items-center mb-6">
+                       <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2"><Icons.Archive/> 歷年封存成績</h3>
+                       <button onClick={() => setShowArchivesModal(false)} className="p-2 bg-gray-100 hover:bg-gray-200 rounded-full transition-colors"><Icons.X/></button>
+                     </div>
+                     <div className="space-y-3">
+                       {archives.length === 0 ? <div className="text-center text-gray-400 py-6">尚無任何封存紀錄</div> : archives.map(a => (
+                         <div key={a.id} onClick={() => setSelectedArchive(a)} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex justify-between items-center cursor-pointer hover:border-teal-300 transition-colors">
+                           <div><div className="font-bold text-gray-800">{a.tournamentName}</div><div className="text-xs text-gray-400 mt-1">{a.dateStr}</div></div>
+                           <button onClick={(e) => { e.stopPropagation(); setConfirmDialog({ message: "確定永久刪除這筆歷史存檔嗎？", onConfirm: async () => await db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(ARCHIVES_COL).doc(a.id).delete() }); }} className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"><Icons.Trash2/></button>
+                         </div>
+                       ))}
+                     </div>
+                   </div>
+                 )}
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          )}
 
-    </div>
-  );
-}
+          {/* 4. 結束比賽確認 */}
+          {finishConfirmData && (
+            <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center">
+                <h3 className="text-lg font-bold text-gray-800 mb-2">確認結束比賽？</h3>
+                <div className="bg-gray-50 p-4 rounded-xl mb-6">
+                   <div className="text-sm text-gray-500 mb-1">比賽結果</div>
+                   <div className="flex items-center justify-center text-xl font-black gap-4 text-gray-800">
+                     <span className={parseInt(finishConfirmData.match.scoreA) > parseInt(finishConfirmData.match.scoreB) ? 'text-pink-600' : ''}>
+                       {finishConfirmData.match.scoreA === '' ? 0 : finishConfirmData.match.scoreA}
+                     </span>
+                     <span className="text-gray-300">-</span>
+                     <span className={parseInt(finishConfirmData.match.scoreB) > parseInt(finishConfirmData.match.scoreA) ? 'text-blue-600' : ''}>
+                       {finishConfirmData.match.scoreB === '' ? 0 : finishConfirmData.match.scoreB}
+                     </span>
+                   </div>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => setFinishConfirmData(null)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-bold transition-colors">繼續比賽</button>
+                  <button onClick={confirmFinishMatch} className="flex-1 py-3 bg-green-500 hover:bg-green-600 text-white rounded-xl font-bold transition-colors">確定登記</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 5. 自訂 Alert 警告視窗 */}
+          {alertMsg && (
+            <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl text-center">
+                <div className="mx-auto w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center mb-4"><Icons.AlertCircle/></div>
+                <p className="text-gray-800 font-bold mb-6">{alertMsg}</p>
+                <button onClick={() => setAlertMsg("")} className="w-full py-3 bg-gray-800 text-white rounded-xl font-bold">了解</button>
+              </div>
+            </div>
+          )}
+
+          {/* 6. 自訂 Confirm 確認視窗 */}
+          {confirmDialog && (
+            <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center">
+                <div className="mx-auto w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mb-4"><Icons.AlertCircle/></div>
+                <p className="text-gray-800 font-bold mb-6 whitespace-pre-wrap leading-relaxed">{confirmDialog.message}</p>
+                <div className="flex gap-3">
+                  <button onClick={() => setConfirmDialog(null)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-bold transition-colors">取消</button>
+                  <button onClick={() => { confirmDialog.onConfirm(); setConfirmDialog(null); }} className="flex-1 py-3 bg-red-500 hover:bg-red-600 text-white rounded-xl font-bold transition-colors">確定</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
