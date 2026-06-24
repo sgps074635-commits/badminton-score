@@ -4,13 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>羽球比賽計分系統</title>
-  
+
   <!-- 1. 核心函式庫 (Tailwind, React, Babel) -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  
+
   <!-- 2. Firebase SDK (Compat Version，專為 HTML 單檔設計) -->
   <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
@@ -51,15 +51,44 @@
     const db = firebase.firestore();
     const auth = firebase.auth();
 
-    // --- 資料庫路徑 ---
+    // --- 資料庫路徑與動態 Room ID 讀取 ---
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomParam = urlParams.get('room') || 'core'; 
     const PUBLIC_DATA = `badminton_2024_final`; 
-    const DATA_GROUP = 'core'; 
+    const DATA_GROUP = roomParam; 
+    
     const MATCHES_COL = 'matches';       
     const SCHEDULE_COL = 'schedule';     
     const COURTS_COL = 'courts';         
     const PLAYERS_COL = 'players'; 
     const ARCHIVES_COL = 'archives';
     const META_COL = 'meta';  
+
+    // 安全的 localStorage 存取（解決 file:/// 協議下被瀏覽器封鎖導致 JavaScript 崩潰白畫面的問題）
+    const safeLocalStorage = {
+      getItem: (key) => {
+        try {
+          return localStorage.getItem(key);
+        } catch (e) {
+          console.warn("localStorage 存取被拒絕（通常發生在直接打開 local file:/// 檔案時）:", e);
+          return null;
+        }
+      },
+      setItem: (key, value) => {
+        try {
+          localStorage.setItem(key, value);
+        } catch (e) {
+          console.warn("localStorage 寫入被拒絕（通常發生在直接打開 local file:/// 檔案時）:", e);
+        }
+      },
+      removeItem: (key) => {
+        try {
+          localStorage.removeItem(key);
+        } catch (e) {
+          console.warn("localStorage 移除被拒絕（通常發生在直接打開 local file:/// 檔案時）:", e);
+        }
+      }
+    };
 
     // 預設名單
     const INITIAL_PLAYERS = [
@@ -100,19 +129,44 @@
       Eye: (props) => <svg xmlns="http://www.w3.org/2000/svg" width={props.size||18} height={props.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={props.className}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>,
       ChevronLeft: (props) => <svg xmlns="http://www.w3.org/2000/svg" width={props.size||18} height={props.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={props.className}><polyline points="15 18 9 12 15 6"></polyline></svg>,
       Medal: (props) => <svg xmlns="http://www.w3.org/2000/svg" width={props.size||18} height={props.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={props.className}><circle cx="12" cy="8" r="7"></circle><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"></polyline></svg>,
-      Loader: (props) => <svg className="animate-spin text-teal-600" xmlns="http://www.w3.org/2000/svg" width={props.size||18} height={props.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>
+      Loader: (props) => <svg className="animate-spin text-teal-600" xmlns="http://www.w3.org/2000/svg" width={props.size||18} height={props.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>,
+      Share: (props) => <svg xmlns="http://www.w3.org/2000/svg" width={props.size||18} height={props.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={props.className}><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><polyline points="16 6 12 2 8 6"></polyline><line x1="12" y1="2" x2="12" y2="15"></line></svg>
     };
 
     // --- 場地卡片元件 ---
-    const CourtCard = ({ courtId, colorTheme, activeMatches, onUpdateScore, onSetup, onRequestFinish, getPlayerName, onCancelMatch, competitionMode }) => {
+    const CourtCard = ({ courtId, colorTheme, activeMatches, onUpdateScore, onSetup, onRequestFinish, getPlayerName, onCancelMatch, competitionMode, isAdmin, onRequestUnlockAdmin }) => {
       const match = activeMatches[courtId];
       const isPlaying = match && match.status === 'playing';
-      
+
       const isOdd = courtId % 2 !== 0;
       const themeClass = isOdd ? 'border-pink-200 bg-pink-50' : 'border-blue-200 bg-blue-50';
       const btnClass = isOdd ? 'bg-pink-500 hover:bg-pink-600' : 'bg-blue-500 hover:bg-blue-600';
       const textClass = isOdd ? 'text-pink-600' : 'text-blue-600';
       const borderFocusClass = isOdd ? 'focus:border-pink-400' : 'focus:border-blue-400';
+
+      const handleSetupClick = () => {
+        if (!isAdmin) {
+          onRequestUnlockAdmin(() => onSetup(courtId));
+        } else {
+          onSetup(courtId);
+        }
+      };
+
+      const handleFinishClick = () => {
+        if (!isAdmin) {
+          onRequestUnlockAdmin(() => onRequestFinish(courtId));
+        } else {
+          onRequestFinish(courtId);
+        }
+      };
+
+      const handleCancelClick = () => {
+        if (!isAdmin) {
+          onRequestUnlockAdmin(() => onCancelMatch(courtId));
+        } else {
+          onCancelMatch(courtId);
+        }
+      };
 
       return (
         <div className={`rounded-3xl border-2 p-4 shadow-sm transition-all ${themeClass} mb-4 relative`}>
@@ -132,7 +186,7 @@
             <div className="flex flex-col items-center py-6">
               <div className="mb-2"><Icons.Users size={48} className="text-gray-300"/></div>
               <button 
-                onClick={() => onSetup(courtId)}
+                onClick={handleSetupClick}
                 className={`w-full py-3 rounded-xl font-bold text-white shadow-md active:scale-95 flex justify-center items-center gap-2 ${btnClass}`}
               >
                 <Icons.PlusCircle size={20}/> 手動建立比賽
@@ -142,7 +196,7 @@
           ) : (
             <div>
               <button 
-                onClick={() => onCancelMatch(courtId)}
+                onClick={handleCancelClick}
                 className="absolute top-4 right-4 text-gray-400 hover:text-red-500 border border-gray-300 rounded px-2 py-1 text-xs transition-colors"
               >
                 取消
@@ -157,12 +211,19 @@
                   <input 
                     type="number" pattern="\d*" placeholder="0"
                     value={match.scoreA}
-                    onClick={(e) => e.target.select()}
+                    readOnly={!isAdmin}
+                    onClick={(e) => {
+                      if (!isAdmin) {
+                        onRequestUnlockAdmin();
+                      } else {
+                        e.target.select();
+                      }
+                    }}
                     onChange={(e) => onUpdateScore(courtId, 'scoreA', e.target.value)}
-                    className={`w-full text-center text-4xl font-black text-gray-800 border-b-2 border-gray-100 outline-none p-2 ${borderFocusClass}`}
+                    className={`w-full text-center text-4xl font-black text-gray-800 border-b-2 border-gray-100 outline-none p-2 ${borderFocusClass} ${!isAdmin ? 'cursor-pointer' : ''}`}
                   />
                 </div>
-                
+
                 <div className="font-bold text-gray-300">VS</div>
 
                 <div className="flex-1 bg-white p-3 rounded-xl text-center shadow-sm">
@@ -173,15 +234,22 @@
                   <input 
                     type="number" pattern="\d*" placeholder="0"
                     value={match.scoreB}
-                    onClick={(e) => e.target.select()}
+                    readOnly={!isAdmin}
+                    onClick={(e) => {
+                      if (!isAdmin) {
+                        onRequestUnlockAdmin();
+                      } else {
+                        e.target.select();
+                      }
+                    }}
                     onChange={(e) => onUpdateScore(courtId, 'scoreB', e.target.value)}
-                    className={`w-full text-center text-4xl font-black text-gray-800 border-b-2 border-gray-100 outline-none p-2 ${borderFocusClass}`}
+                    className={`w-full text-center text-4xl font-black text-gray-800 border-b-2 border-gray-100 outline-none p-2 ${borderFocusClass} ${!isAdmin ? 'cursor-pointer' : ''}`}
                   />
                 </div>
               </div>
-              
+
               <button 
-                onClick={() => onRequestFinish(courtId)}
+                onClick={handleFinishClick}
                 className="w-full py-3 bg-gray-800 text-white rounded-xl font-bold shadow-md hover:bg-black transition-colors flex items-center justify-center gap-2"
               >
                 <Icons.CheckCircle size={18}/> 結束比賽並登記
@@ -202,9 +270,9 @@
       const [players, setPlayers] = useState([]);
       const [matches, setMatches] = useState([]);
       const [scheduledQueue, setScheduledQueue] = useState([]);
-      const [activeMatches, setActiveMatches] = useState({ 1: null, 2: null });
+      const [activeMatches, setActiveMatches] = useState({});
       const [archives, setArchives] = useState([]);
-      
+
       // --- 全域設定狀態 ---
       const [currentRound, setCurrentRound] = useState(1);
       const [tournamentName, setTournamentName] = useState("🏸 羽球比賽");
@@ -212,18 +280,39 @@
       const [matchesPerPlayer, setMatchesPerPlayer] = useState(4);
       const [competitionMode, setCompetitionMode] = useState('individual'); // 'individual' | 'team'
 
+      // --- 管理員權限狀態 ---
+      const [adminPassword, setAdminPassword] = useState("");
+      const [isAdmin, setIsAdmin] = useState(() => {
+        return safeLocalStorage.getItem(`admin_auth_${roomParam}`) === 'true';
+      });
+      const [showPasswordSetupModal, setShowPasswordSetupModal] = useState(false);
+      const [showPasswordInputModal, setShowPasswordInputModal] = useState(false);
+      const [tempInputPassword, setTempInputPassword] = useState("");
+      const [passwordActionCallback, setPasswordActionCallback] = useState(null);
+
+      // --- Undo 復原狀態 ---
+      const [lastFinishedMatch, setLastFinishedMatch] = useState(null);
+      const [showUndoToast, setShowUndoToast] = useState(false);
+      const [undoCountdown, setUndoCountdown] = useState(10);
+
+      // --- 歷史紀錄編輯狀態 ---
+      const [showEditScoreModal, setShowEditScoreModal] = useState(false);
+      const [editingMatch, setEditingMatch] = useState(null);
+      const [tempEditScoreA, setTempEditScoreA] = useState("");
+      const [tempEditScoreB, setTempEditScoreB] = useState("");
+
       // --- UI 狀態 ---
       const [newPlayerName, setNewPlayerName] = useState("");
       const [isExporting, setIsExporting] = useState(false);
       const [selectedArchive, setSelectedArchive] = useState(null);
       const [showArchivesModal, setShowArchivesModal] = useState(false);
-      
+
       // --- Modals ---
       const [showSetupModal, setShowSetupModal] = useState(false);
       const [setupCourtId, setSetupCourtId] = useState(null);
       const [tempTeamA, setTempTeamA] = useState([]);
       const [tempTeamB, setTempTeamB] = useState([]);
-      
+
       const [showSettingsModal, setShowSettingsModal] = useState(false);
       const [tempSettingsName, setTempSettingsName] = useState("");
       const [tempMode, setTempMode] = useState('individual');
@@ -242,41 +331,54 @@
         if (!user) return;
 
         // 1. 同步選手
-        const unsubP = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(PLAYERS_COL).orderBy('createdAt', 'asc').onSnapshot(snap => {
-            if (snap.empty) {
-                const batch = db.batch();
-                INITIAL_PLAYERS.forEach(p => {
-                    const ref = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(PLAYERS_COL).doc(p.id.toString());
-                    batch.set(ref, { name: p.name, createdAt: Date.now() + parseInt(p.id) });
-                });
-                batch.commit();
-            } else {
-                setPlayers(snap.docs.map(d => ({id: d.id, ...d.data()})));
-            }
-        });
+        const unsubP = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(PLAYERS_COL).orderBy('createdAt', 'asc')
+          .onSnapshot(snap => {
+              if (snap.empty) {
+                  const batch = db.batch();
+                  INITIAL_PLAYERS.forEach(p => {
+                      const ref = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(PLAYERS_COL).doc(p.id.toString());
+                      batch.set(ref, { name: p.name, createdAt: Date.now() + parseInt(p.id) });
+                  });
+                  batch.commit();
+              } else {
+                  setPlayers(snap.docs.map(d => ({id: d.id, ...d.data()})));
+              }
+          }, err => {
+              console.error("Players sync error:", err);
+          });
 
         // 2. 同步歷史記錄
         const unsubM = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(MATCHES_COL).orderBy('timestampRaw', 'desc')
-          .onSnapshot(snap => setMatches(snap.docs.map(d => ({id: d.id, ...d.data()}))));
-          
+          .onSnapshot(snap => setMatches(snap.docs.map(d => ({id: d.id, ...d.data()}))), err => {
+              console.error("Matches sync error:", err);
+          });
+
         // 3. 同步賽程
         const unsubS = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(SCHEDULE_COL).orderBy('createdAt', 'asc')
-          .onSnapshot(snap => setScheduledQueue(snap.docs.map(d => ({id: d.id, ...d.data()}))));
-          
+          .onSnapshot(snap => setScheduledQueue(snap.docs.map(d => ({id: d.id, ...d.data()}))), err => {
+              console.error("Schedule sync error:", err);
+          });
+
         // 4. 同步歷年成績
         const unsubA = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(ARCHIVES_COL).orderBy('createdAt', 'desc')
-          .onSnapshot(snap => setArchives(snap.docs.map(d => ({id: d.id, ...d.data()}))));
-          
+          .onSnapshot(snap => setArchives(snap.docs.map(d => ({id: d.id, ...d.data()}))), err => {
+              console.error("Archives sync error:", err);
+          });
+
         // 5. 同步場地
         const unsubC = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(COURTS_COL)
           .onSnapshot(snap => {
-            const c = {1: null, 2: null};
+            const c = {};
             snap.docs.forEach(d => { c[d.id] = d.data(); });
             setActiveMatches(c);
             setLoading(false);
+          }, err => {
+            console.error("Courts sync error:", err);
+            setAlertMsg("資料庫同步失敗，請檢查網路連線或房間 ID 是否正確。");
+            setLoading(false);
           });
-          
-        // 6. 同步全域設定
+
+        // 6. 同步全域設定（包含管理員密碼載入）
         const unsubMeta = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(META_COL).doc('global')
           .onSnapshot(snap => {
             if(snap.exists) {
@@ -286,24 +388,95 @@
                 setCourtCount(d.courtCount || 2);
                 setMatchesPerPlayer(d.matchesPerPlayer || 4);
                 setCompetitionMode(d.competitionMode || 'individual');
+                setAdminPassword(d.adminPassword || "");
             } else {
                 db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(META_COL).doc('global')
-                  .set({currentRound: 1, tournamentName: "🏸 羽球比賽", courtCount: 2, matchesPerPlayer: 4, competitionMode: 'individual'});
+                  .set({currentRound: 1, tournamentName: "🏸 羽球比賽", courtCount: 2, matchesPerPlayer: 4, competitionMode: 'individual', adminPassword: ""});
             }
+          }, err => {
+              console.error("Meta sync error:", err);
           });
 
         return () => { unsubP(); unsubM(); unsubS(); unsubA(); unsubC(); unsubMeta(); };
       }, [user]);
 
+      // --- Undo Countdown Effect ---
+      useEffect(() => {
+        if (!showUndoToast) return;
+        if (undoCountdown <= 0) {
+          setShowUndoToast(false);
+          setLastFinishedMatch(null);
+          return;
+        }
+        const timer = setTimeout(() => {
+          setUndoCountdown(undoCountdown - 1);
+        }, 1000);
+        return () => clearTimeout(timer);
+      }, [showUndoToast, undoCountdown]);
+
       // --- Helpers ---
       const getPlayerName = (id) => { const p = players.find(x => x.id === id); return p ? p.name : "未知"; };
-      
+
       const getBusyPlayerIds = () => {
         let ids = [];
         Object.values(activeMatches).forEach(match => {
           if (match && match.status === 'playing') ids = [...ids, ...match.teamA, ...match.teamB];
         });
         return ids;
+      };
+
+      // --- Admin Lock Helpers ---
+      const runAsAdmin = (callback) => {
+        if (isAdmin) {
+          if (callback) callback();
+          return;
+        }
+        if (!adminPassword) {
+          setPasswordActionCallback(() => callback);
+          setTempInputPassword("");
+          setShowPasswordSetupModal(true);
+        } else {
+          setPasswordActionCallback(() => callback);
+          setTempInputPassword("");
+          setShowPasswordInputModal(true);
+        }
+      };
+
+      const handleAdminLogin = (inputPass) => {
+        if (inputPass === adminPassword) {
+          setIsAdmin(true);
+          safeLocalStorage.setItem(`admin_auth_${roomParam}`, 'true');
+          setShowPasswordInputModal(false);
+          if (passwordActionCallback) {
+            passwordActionCallback();
+            setPasswordActionCallback(null);
+          }
+        } else {
+          setAlertMsg("密碼錯誤，請重新輸入！");
+        }
+      };
+
+      const handlePasswordSetup = async (newPass) => {
+        if (!newPass.trim()) {
+          setAlertMsg("密碼不能為空！");
+          return;
+        }
+        await db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(META_COL).doc('global').update({
+          adminPassword: newPass.trim()
+        });
+        setIsAdmin(true);
+        safeLocalStorage.setItem(`admin_auth_${roomParam}`, 'true');
+        setShowPasswordSetupModal(false);
+        if (passwordActionCallback) {
+          passwordActionCallback();
+          setPasswordActionCallback(null);
+        }
+        setAlertMsg("管理密碼設定成功！已解鎖管理模式。");
+      };
+
+      const handleAdminLogout = () => {
+        setIsAdmin(false);
+        safeLocalStorage.removeItem(`admin_auth_${roomParam}`);
       };
 
       // --- Statistics Calculation ---
@@ -319,7 +492,7 @@
                 s[pid].matchesPlayed++; s[pid].pointsWon += score; s[pid].pointsLost += oppScore;
                 if (score > oppScore) s[pid].wins++; else s[pid].losses++;
                 s[pid].lastActiveTime = Math.max(s[pid].lastActiveTime, time);
-                
+
                 const partner = competitionMode === 'individual' ? teamIds.find(i => i !== pid) : null;
                 const opponentsList = opponents.map(id => getPlayerName(id));
                 s[pid].fullSchedule.push({ id: m.id, type: 'finished', round: m.round, partner, opponents: opponentsList, score: `${score}-${oppScore}`, result: score > oppScore ? 'WIN' : 'LOSE', timestamp: time });
@@ -334,6 +507,7 @@
           const m = activeMatches[cid];
           if (m && m.status === 'playing') {
             const sA = m.scoreA || 0, sB = m.scoreB || 0;
+
             const procActive = (teamIds, score, oppScore, opponents) => {
                teamIds.forEach(pid => {
                  if (s[pid]) {
@@ -379,6 +553,10 @@
         await db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(META_COL).doc('global').update({ [k]: v });
       };
 
+      const handleUpdateMetaClick = (key, val) => {
+        runAsAdmin(() => updateMeta(key, val));
+      };
+
       const saveSettings = async () => {
         if (!tempSettingsName.trim() || !user) return;
         await db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(META_COL).doc('global').update({
@@ -395,10 +573,27 @@
         setNewPlayerName("");
       };
 
-      // 核心：生成全賽事演算法
+      const deletePlayer = async (id) => {
+        if (!user) return;
+        if (getBusyPlayerIds().includes(id)) {
+          setAlertMsg("該選手正在比賽中，無法刪除！");
+          return;
+        }
+        await db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(PLAYERS_COL).doc(id).delete();
+      };
+
+      const handleDeletePlayerClick = (p) => {
+        setConfirmDialog({
+          message: `確定刪除選手/隊伍 ${p.name} 嗎？`,
+          onConfirm: () => runAsAdmin(() => deletePlayer(p.id))
+        });
+      };
+
+      // 核心：生成全賽事演算法 (優化為具備限制放寬之 Fallback 降級機制，防止卡死)
       const generateAllMatches = async () => {
-        if (players.length < 4) {
-          setAlertMsg("選手/隊伍人數不足 4 人，無法產生賽程！");
+        const minNeeded = competitionMode === 'team' ? 2 : 4;
+        if (players.length < minNeeded) {
+          setAlertMsg(`選手/隊伍人數不足 ${minNeeded} 人，無法產生賽程！`);
           return;
         }
 
@@ -413,7 +608,7 @@
         const hist = new Set();
         const oppGraph = {};
         const addRec = (p1, p2) => { if (!oppGraph[p1]) oppGraph[p1] = new Set(); if (!oppGraph[p2]) oppGraph[p2] = new Set(); oppGraph[p1].add(p2); oppGraph[p2].add(p1); };
-        
+
         const addH = (A, B) => {
           if (competitionMode === 'individual') {
             hist.add([...A].sort().join('-')); hist.add([...B].sort().join('-'));
@@ -422,85 +617,114 @@
             addRec(A[0], B[0]);
           }
         };
-        
+
         matches.forEach(m => addH(m.teamA, m.teamB));
         Object.values(activeMatches).forEach(m => { if (m && m.status === 'playing') addH(m.teamA, m.teamB); });
 
         let sched = [], success = false;
-        for (let attempt = 0; attempt < 100; attempt++) {
-          let tempSched = [], tempH = new Set(hist), playCounts = {}, valid = true;
-          let tempOppGraph = {};
-          Object.keys(oppGraph).forEach(k => tempOppGraph[k] = new Set(oppGraph[k]));
-          pIds.forEach(id => playCounts[id] = 0);
+        let allowedRepeatOpps = 0; // 允許重複對打次數限制，從 0 開始漸進放寬
+        let forceGenerate = false;
 
-          for (let m = 0; m < totalMatchesToGenerate; m++) {
-            let cands = pIds.filter(id => playCounts[id] < matchesPerPlayer);
-            if (m > 0) {
-              const pm = tempSched[m - 1];
-              cands = cands.filter(id => ![...pm.teamA, ...pm.teamB].includes(id));
-            }
-            
-            const minNeeded = competitionMode === 'team' ? 2 : 4;
-            if (cands.length < minNeeded) { valid = false; break; }
-            
-            let bestM = null, minReps = Infinity;
-            
-            for (let k = 0; k < 30; k++) {
-              const pool = [...cands].sort(() => 0.5 - Math.random());
-              let tA, tB;
+        // 外層循環：限制放寬等級 (0 = 最嚴格不重複, 5 = 最寬鬆以防卡死)
+        for (let relaxation = 0; relaxation < 6; relaxation++) {
+          for (let attempt = 0; attempt < 50; attempt++) {
+            let tempSched = [], tempH = new Set(hist), playCounts = {}, valid = true;
+            let tempOppGraph = {};
+            Object.keys(oppGraph).forEach(k => tempOppGraph[k] = new Set(oppGraph[k]));
+            pIds.forEach(id => playCounts[id] = 0);
 
-              if (competitionMode === 'team') {
-                const p1 = pool[0];
-                let p2Idx = 0;
-                for (let idx = 0; idx < pool.length - 1; idx++) {
-                  const candidate = pool[idx + 1];
-                  if (!(tempOppGraph[p1] && tempOppGraph[p1].has(candidate))) { p2Idx = idx; break; }
+            for (let m = 0; m < totalMatchesToGenerate; m++) {
+              let cands = pIds.filter(id => playCounts[id] < matchesPerPlayer);
+              if (m > 0) {
+                // 避開上一場剛打完的人（避免連續上場）
+                const pm = tempSched[m - 1];
+                cands = cands.filter(id => ![...pm.teamA, ...pm.teamB].includes(id));
+              }
+
+              // 若因避開連續上場導致候選人數不足，則放寬連續上場限制
+              if (cands.length < minNeeded) {
+                cands = pIds.filter(id => playCounts[id] < matchesPerPlayer);
+              }
+              if (cands.length < minNeeded) { valid = false; break; }
+
+              let bestM = null, minReps = Infinity;
+
+              for (let k = 0; k < 30; k++) {
+                const pool = [...cands].sort(() => 0.5 - Math.random());
+                let tA, tB;
+
+                if (competitionMode === 'team') {
+                  const p1 = pool[0];
+                  let p2Idx = 0;
+                  // 尋找未對戰過（或重複對戰次數在限制內）的對手
+                  for (let idx = 0; idx < pool.length - 1; idx++) {
+                    const candidate = pool[idx + 1];
+                    const reps = (tempOppGraph[p1] && tempOppGraph[p1].has(candidate)) ? 1 : 0;
+                    if (reps <= allowedRepeatOpps) { p2Idx = idx; break; }
+                  }
+                  tA = [p1]; tB = [pool[1 + p2Idx]];
+                } else {
+                  // 個人雙打
+                  const p1 = pool[0];
+                  // 隊友篩選 (配對歷史限制放寬)
+                  let p2Idx = pool.slice(1).findIndex(p => {
+                    const partnerKey = [p1, p].sort().join('-');
+                    return !tempH.has(partnerKey) || relaxation >= 2;
+                  });
+                  if (p2Idx === -1) continue;
+                  const p2 = pool[1 + p2Idx];
+                  const rem = pool.filter(p => p !== p1 && p !== p2);
+                  if (rem.length < 2) continue;
+                  const p3 = rem[0];
+                  let p4Idx = rem.slice(1).findIndex(p => {
+                    const partnerKey = [p3, p].sort().join('-');
+                    return !tempH.has(partnerKey) || relaxation >= 2;
+                  });
+                  if (p4Idx === -1) continue;
+                  const p4 = rem[1 + p4Idx];
+                  tA = [p1, p2]; tB = [p3, p4];
                 }
-                tA = [p1]; tB = [pool[1 + p2Idx]];
-              } else {
-                const p1 = pool[0];
-                const p2Idx = pool.slice(1).findIndex(p => !tempH.has([p1, p].sort().join('-')));
-                if (p2Idx === -1) continue;
-                const p2 = pool[1 + p2Idx];
-                const rem = pool.filter(p => p !== p1 && p !== p2);
-                if (rem.length < 2) continue;
-                const p3 = rem[0];
-                const p4Idx = rem.slice(1).findIndex(p => !tempH.has([p3, p].sort().join('-')));
-                if (p4Idx === -1) continue;
-                const p4 = rem[1 + p4Idx];
-                tA = [p1, p2]; tB = [p3, p4];
+
+                // 計算此對戰組合重複程度
+                let r = 0;
+                const checkR = (a, b) => (tempOppGraph[a] && tempOppGraph[a].has(b)) ? 1 : 0;
+                if (competitionMode === 'team') {
+                  r = checkR(tA[0], tB[0]);
+                } else {
+                  r = checkR(tA[0], tB[0]) + checkR(tA[0], tB[1]) + checkR(tA[1], tB[0]) + checkR(tA[1], tB[1]);
+                }
+
+                // 滿足目前放寬條件，即採用
+                if (r <= allowedRepeatOpps || relaxation === 5) { bestM = { teamA: tA, teamB: tB }; break; }
+                if (r < minReps) { minReps = r; bestM = { teamA: tA, teamB: tB }; }
               }
-              
-              let r = 0;
-              const checkR = (a, b) => (tempOppGraph[a] && tempOppGraph[a].has(b)) ? 1 : 0;
-              if (competitionMode === 'team') {
-                r = checkR(tA[0], tB[0]);
-              } else {
-                r = checkR(tA[0], tB[0]) + checkR(tA[0], tB[1]) + checkR(tA[1], tB[0]) + checkR(tA[1], tB[1]);
-              }
-              
-              if (r === 0) { bestM = { teamA: tA, teamB: tB }; break; }
-              if (r < minReps) { minReps = r; bestM = { teamA: tA, teamB: tB }; }
+
+              if (bestM) {
+                tempSched.push(bestM);
+                if (competitionMode === 'individual') {
+                  tempH.add([...bestM.teamA].sort().join('-')); tempH.add([...bestM.teamB].sort().join('-'));
+                  const addTO = (a, b) => { if (!tempOppGraph[a]) tempOppGraph[a] = new Set(); if (!tempOppGraph[b]) tempOppGraph[b] = new Set(); tempOppGraph[a].add(b); tempOppGraph[b].add(a); };
+                  addTO(bestM.teamA[0], bestM.teamB[0]); addTO(bestM.teamA[0], bestM.teamB[1]); addTO(bestM.teamA[1], bestM.teamB[0]); addTO(bestM.teamA[1], bestM.teamB[1]);
+                } else {
+                  const addTO = (a, b) => { if (!tempOppGraph[a]) tempOppGraph[a] = new Set(); if (!tempOppGraph[b]) tempOppGraph[b] = new Set(); tempOppGraph[a].add(b); tempOppGraph[b].add(a); };
+                  addTO(bestM.teamA[0], bestM.teamB[0]);
+                }
+                [...bestM.teamA, ...bestM.teamB].forEach(p => playCounts[p]++);
+              } else { valid = false; break; }
             }
-            
-            if (bestM) {
-              tempSched.push(bestM);
-              if (competitionMode === 'individual') {
-                tempH.add([...bestM.teamA].sort().join('-')); tempH.add([...bestM.teamB].sort().join('-'));
-                const addTO = (a, b) => { if (!tempOppGraph[a]) tempOppGraph[a] = new Set(); if (!tempOppGraph[b]) tempOppGraph[b] = new Set(); tempOppGraph[a].add(b); tempOppGraph[b].add(a); };
-                addTO(bestM.teamA[0], bestM.teamB[0]); addTO(bestM.teamA[0], bestM.teamB[1]); addTO(bestM.teamA[1], bestM.teamB[0]); addTO(bestM.teamA[1], bestM.teamB[1]);
-              } else {
-                const addTO = (a, b) => { if (!tempOppGraph[a]) tempOppGraph[a] = new Set(); if (!tempOppGraph[b]) tempOppGraph[b] = new Set(); tempOppGraph[a].add(b); tempOppGraph[b].add(a); };
-                addTO(bestM.teamA[0], bestM.teamB[0]);
-              }
-              [...bestM.teamA, ...bestM.teamB].forEach(p => playCounts[p]++);
-            } else { valid = false; break; }
+            if (valid) { sched = tempSched; success = true; break; }
           }
-          if (valid) { sched = tempSched; success = true; break; }
+          if (success) {
+            if (relaxation > 0) {
+              forceGenerate = true;
+            }
+            break;
+          }
+          allowedRepeatOpps++;
         }
 
         if (!success) {
-          setAlertMsg("無法生成完美不重複賽程，請調整條件！");
+          setAlertMsg("無法生成賽程，請調整選手名單或每人場數！");
           return;
         }
 
@@ -513,17 +737,24 @@
         });
         if (matches.length === 0) batch2.update(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(META_COL).doc('global'), { currentRound: 1 });
         await batch2.commit();
+
+        if (forceGenerate) {
+          setAlertMsg("因人數與場數限制，系統已為您放寬條件並生成「含少數重複對手」的賽程！");
+        } else {
+          setAlertMsg("賽程表已完美生成！");
+        }
       };
 
       const dispatchMatchToCourt = async (matchId, courtId) => {
         if (!user) return;
+
         const m = scheduledQueue.find(x => x.id === matchId);
         if (!m) return;
         if ([...m.teamA, ...m.teamB].some(id => getBusyPlayerIds().includes(id))) {
           setAlertMsg("選手忙碌中，無法派發！");
           return;
         }
-        
+
         const batch = db.batch();
         batch.set(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(COURTS_COL).doc(courtId.toString()), {
           ...m, scoreA: '', scoreB: '', status: 'playing', startTime: Date.now()
@@ -531,6 +762,10 @@
         batch.delete(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(SCHEDULE_COL).doc(matchId));
         await batch.commit();
         setActiveTab('courts');
+      };
+
+      const handleDispatchMatchToCourt = (matchId, courtId) => {
+        runAsAdmin(() => dispatchMatchToCourt(matchId, courtId));
       };
 
       const saveToArchives = async () => {
@@ -556,6 +791,51 @@
           setAlertMsg("截圖下載失敗");
         } finally {
           setIsExporting(false);
+        }
+      };
+
+      // --- Undo Score Registration ---
+      const handleUndoFinish = async () => {
+        if (!lastFinishedMatch) return;
+        const { matchesDocId, courtId, courtData } = lastFinishedMatch;
+        
+        try {
+          const batch = db.batch();
+          batch.set(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(COURTS_COL).doc(courtId.toString()), {
+            ...courtData,
+            status: 'playing'
+          });
+          batch.delete(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(MATCHES_COL).doc(matchesDocId));
+          await batch.commit();
+          
+          setShowUndoToast(false);
+          setLastFinishedMatch(null);
+          setAlertMsg("已成功撤銷前一場比賽登記，並恢復場地計分！");
+        } catch (e) {
+          setAlertMsg("撤銷失敗，該比賽紀錄可能已被移除。");
+        }
+      };
+
+      // --- History Score Editing ---
+      const saveEditedScore = async () => {
+        if (!editingMatch || !user) return;
+        const sA = tempEditScoreA === '' ? 0 : parseInt(tempEditScoreA);
+        const sB = tempEditScoreB === '' ? 0 : parseInt(tempEditScoreB);
+        if (isNaN(sA) || isNaN(sB)) {
+          setAlertMsg("比分輸入有誤！");
+          return;
+        }
+
+        try {
+          await db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(MATCHES_COL).doc(editingMatch.id).update({
+            scoreA: sA,
+            scoreB: sB
+          });
+          setShowEditScoreModal(false);
+          setEditingMatch(null);
+          setAlertMsg("比分已成功修改！");
+        } catch (e) {
+          setAlertMsg("儲存失敗，請檢查網路連線。");
         }
       };
 
@@ -589,6 +869,12 @@
         setShowSetupModal(false);
       };
 
+      const closeSetupModal = () => {
+        setShowSetupModal(false);
+        setTempTeamA([]);
+        setTempTeamB([]);
+      };
+
       if (loading) {
         return (
           <div className="min-h-screen flex items-center justify-center bg-amber-50 text-teal-600 font-bold gap-2">
@@ -601,17 +887,53 @@
         <div className="min-h-screen bg-amber-50 font-sans text-gray-800 pb-24">
           {/* Header */}
           <div className="bg-gradient-to-br from-teal-400 to-emerald-500 text-white p-6 rounded-b-[3rem] shadow-lg mb-6 relative">
+            {/* 左上角管理狀態切換 */}
+            <div className="absolute top-4 left-4 text-xs bg-black/20 px-2 py-1 rounded-full flex items-center gap-1 cursor-pointer hover:bg-black/30 transition-colors" onClick={() => {
+              if (isAdmin) {
+                handleAdminLogout();
+              } else {
+                runAsAdmin(() => {});
+              }
+            }}>
+              {isAdmin ? <><Icons.Zap size={12} className="text-yellow-300 animate-pulse" /> 管理模式 (登出)</> : <><Icons.Eye size={12} /> 檢視模式 (解鎖)</>}
+            </div>
+
             <div className="absolute top-4 right-4 text-xs bg-black/20 px-2 py-1 rounded-full flex items-center gap-1">
               {user ? <><Icons.Wifi size={12} /> 同步中</> : <><Icons.WifiOff size={12} /> 離線</>}
             </div>
-            <div className="flex items-center justify-center gap-2 mb-2">
+            
+            <div className="flex items-center justify-center gap-2 mb-1 mt-3">
               <h1 className="text-2xl font-bold cursor-pointer" onClick={() => { setTempSettingsName(tournamentName); setTempMode(competitionMode); setShowSettingsModal(true); }}>{tournamentName}</h1>
-              <button onClick={() => { setTempSettingsName(tournamentName); setTempMode(competitionMode); setShowSettingsModal(true); }} className="opacity-50 hover:opacity-100"><Icons.Settings size={18} /></button>
+              <button onClick={() => runAsAdmin(() => { setTempSettingsName(tournamentName); setTempMode(competitionMode); setShowSettingsModal(true); })} className="opacity-50 hover:opacity-100"><Icons.Settings size={18} /></button>
             </div>
-            <div className="flex justify-center text-sm gap-4 opacity-90">
-              <span className="bg-white/20 px-2 py-1 rounded-full">第 {currentRound} 輪</span>
-              <span className="bg-white/20 px-2 py-1 rounded-full">{courtCount} 場地</span>
-              <span className="bg-white/20 px-2 py-1 rounded-full">{players.length} {competitionMode === 'team' ? '隊伍' : '選手'}</span>
+
+            <div className="flex justify-center text-xs gap-3 opacity-95">
+              <span className="bg-white/20 px-2 py-0.5 rounded-full">第 {currentRound} 輪</span>
+              <span className="bg-white/20 px-2 py-0.5 rounded-full">{courtCount} 場地</span>
+              <span className="bg-white/20 px-2 py-0.5 rounded-full">{players.length} {competitionMode === 'team' ? '隊伍' : '選手'}</span>
+            </div>
+
+            {/* 房間 ID 分享與切換列 */}
+            <div className="mt-3 flex justify-center gap-2">
+              <span className="bg-black/20 text-[10px] px-2.5 py-1 rounded-full font-mono flex items-center gap-1 select-all">
+                房間: {roomParam === 'core' ? 'default (core)' : roomParam}
+              </span>
+              <button onClick={() => {
+                navigator.clipboard.writeText(window.location.href);
+                setAlertMsg("已複製房間專屬連結至剪貼簿，可分享給其他裁判或參賽者！");
+              }} className="bg-white/20 hover:bg-white/30 text-[10px] px-2 py-1 rounded-full flex items-center gap-1 transition-colors active:scale-95">
+                <Icons.Share size={10} /> 分享連結
+              </button>
+              <button onClick={() => {
+                const newRoom = prompt("請輸入要切換或建立的房間 ID:", roomParam === 'core' ? '' : roomParam);
+                if (newRoom && newRoom.trim() && newRoom.trim() !== roomParam) {
+                  window.location.search = `?room=${encodeURIComponent(newRoom.trim())}`;
+                } else if (newRoom === '') {
+                  window.location.search = '';
+                }
+              }} className="bg-white/20 hover:bg-white/30 text-[10px] px-2 py-1 rounded-full flex items-center gap-1 transition-colors active:scale-95">
+                切換房間
+              </button>
             </div>
           </div>
 
@@ -645,14 +967,14 @@
                 <div className="flex gap-2 mb-6">
                   <input type="text" value={newPlayerName} onChange={e => setNewPlayerName(e.target.value)} placeholder={`輸入${competitionMode === 'team' ? '隊名' : '姓名'}...`}
                     className="flex-1 border-2 border-pink-100 rounded-xl px-4 py-2 outline-none focus:border-pink-400"
-                    onKeyDown={e => e.key === 'Enter' && addPlayer()} />
-                  <button onClick={addPlayer} className="bg-pink-500 text-white p-3 rounded-xl shadow active:scale-95"><Icons.UserPlus size={20}/></button>
+                    onKeyDown={e => e.key === 'Enter' && runAsAdmin(addPlayer)} />
+                  <button onClick={() => runAsAdmin(addPlayer)} className="bg-pink-500 text-white p-3 rounded-xl shadow active:scale-95"><Icons.UserPlus size={20}/></button>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   {players.map(p => (
                     <div key={p.id} className="bg-pink-50 p-3 rounded-xl flex justify-between items-center group">
                       <span className="font-bold text-gray-700 truncate">{p.name}</span>
-                      <button onClick={() => setConfirmDialog({ message: `確定刪除 ${p.name} 嗎？`, onConfirm: () => deletePlayer(p.id) })} className="text-pink-300 hover:text-red-500"><Icons.X size={16}/></button>
+                      <button onClick={() => handleDeletePlayerClick(p)} className="text-pink-300 hover:text-red-500"><Icons.X size={16}/></button>
                     </div>
                   ))}
                 </div>
@@ -664,12 +986,13 @@
               <div className="space-y-4">
                 <div className="bg-white p-5 rounded-3xl shadow-sm border border-green-100">
                   <div className="flex justify-between mb-4 border-b border-gray-100 pb-4">
-                    <div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-500">場地數</span><button onClick={() => updateMeta('courtCount', Math.max(1, courtCount - 1))} className="p-1 hover:bg-gray-100 rounded"><Icons.Minus size={16} /></button><span className="font-black text-blue-600 w-4 text-center">{courtCount}</span><button onClick={() => updateMeta('courtCount', Math.min(10, courtCount + 1))} className="p-1 hover:bg-gray-100 rounded"><Icons.Plus size={16} /></button></div>
-                    <div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-500">每人場數</span><button onClick={() => updateMeta('matchesPerPlayer', Math.max(1, matchesPerPlayer - 1))} className="p-1 hover:bg-gray-100 rounded"><Icons.Minus size={16} /></button><span className="font-black text-green-600 w-4 text-center">{matchesPerPlayer}</span><button onClick={() => updateMeta('matchesPerPlayer', Math.min(10, matchesPerPlayer + 1))} className="p-1 hover:bg-gray-100 rounded"><Icons.Plus size={16} /></button></div>
+                    <div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-500">場地數</span><button onClick={() => handleUpdateMetaClick('courtCount', Math.max(1, courtCount - 1))} className="p-1 hover:bg-gray-100 rounded"><Icons.Minus size={16} /></button><span className="font-black text-blue-600 w-4 text-center">{courtCount}</span><button onClick={() => handleUpdateMetaClick('courtCount', Math.min(10, courtCount + 1))} className="p-1 hover:bg-gray-100 rounded"><Icons.Plus size={16} /></button></div>
+
+                    <div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-500">每人場數</span><button onClick={() => handleUpdateMetaClick('matchesPerPlayer', Math.max(1, matchesPerPlayer - 1))} className="p-1 hover:bg-gray-100 rounded"><Icons.Minus size={16} /></button><span className="font-black text-green-600 w-4 text-center">{matchesPerPlayer}</span><button onClick={() => handleUpdateMetaClick('matchesPerPlayer', Math.min(10, matchesPerPlayer + 1))} className="p-1 hover:bg-gray-100 rounded"><Icons.Plus size={16} /></button></div>
                   </div>
 
-                  <button onClick={() => setConfirmDialog({ message: "這將清除目前待打賽程，重新產生組合，確定嗎？", onConfirm: generateAllMatches })} className="w-full py-3 bg-purple-500 hover:bg-purple-600 text-white rounded-xl font-bold shadow flex justify-center items-center gap-2 transition-all active:scale-95"><Icons.Activity size={18}/> 生成全賽事</button>
-                  {scheduledQueue.length > 0 && <button onClick={() => setConfirmDialog({ message: "確定要清空賽程表嗎？", onConfirm: async () => { const batch = db.batch(); scheduledQueue.forEach(s => batch.delete(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(SCHEDULE_COL).doc(s.id))); await batch.commit(); } })} className="w-full mt-2 py-2 bg-red-100 hover:bg-red-200 text-red-600 rounded-xl font-bold flex justify-center gap-2 text-sm transition-colors"><Icons.Trash2 size={16}/> 清空賽程</button>}
+                  <button onClick={() => setConfirmDialog({ message: "這將清除目前待打賽程，重新產生組合，確定嗎？", onConfirm: () => runAsAdmin(generateAllMatches) })} className="w-full py-3 bg-purple-500 hover:bg-purple-600 text-white rounded-xl font-bold shadow flex justify-center items-center gap-2 transition-all active:scale-95"><Icons.Activity size={18}/> 生成全賽事</button>
+                  {scheduledQueue.length > 0 && <button onClick={() => setConfirmDialog({ message: "確定要清空賽程表嗎？", onConfirm: () => runAsAdmin(async () => { const batch = db.batch(); scheduledQueue.forEach(s => batch.delete(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(SCHEDULE_COL).doc(s.id))); await batch.commit(); }) })} className="w-full mt-2 py-2 bg-red-100 hover:bg-red-200 text-red-600 rounded-xl font-bold flex justify-center gap-2 text-sm transition-colors"><Icons.Trash2 size={16}/> 清空賽程</button>}
                 </div>
 
                 {scheduledQueue.map((m, i) => {
@@ -690,7 +1013,7 @@
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         {Array.from({ length: courtCount }).map((_, k) => (
-                          <button key={k} disabled={busy || activeMatches[k + 1]?.status === 'playing'} onClick={() => dispatchMatchToCourt(m.id, k + 1)} className={`py-2 rounded-lg font-bold text-sm transition-colors flex items-center justify-center gap-1 ${busy || activeMatches[k + 1]?.status === 'playing' ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : (k % 2 ? 'bg-blue-100 text-blue-600 hover:bg-blue-200' : 'bg-pink-100 text-pink-600 hover:bg-pink-200')}`}><Icons.ArrowRightCircle size={14}/> {k + 1} 場</button>
+                          <button key={k} disabled={busy || activeMatches[k + 1]?.status === 'playing'} onClick={() => handleDispatchMatchToCourt(m.id, k + 1)} className={`py-2 rounded-lg font-bold text-sm transition-colors flex items-center justify-center gap-1 ${busy || activeMatches[k + 1]?.status === 'playing' ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : (k % 2 ? 'bg-blue-100 text-blue-600 hover:bg-blue-200' : 'bg-pink-100 text-pink-600 hover:bg-pink-200')}`}><Icons.ArrowRightCircle size={14}/> {k + 1} 場</button>
                         ))}
                       </div>
                     </div>
@@ -723,11 +1046,22 @@
                            const finalScoreA = match.scoreA === '' ? 0 : match.scoreA;
                            const finalScoreB = match.scoreB === '' ? 0 : match.scoreB;
                            const batch = db.batch();
-                           batch.set(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(MATCHES_COL).doc(), {
+                           const matchRef = db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(MATCHES_COL).doc();
+                           
+                           batch.set(matchRef, {
                              ...match, scoreA: finalScoreA, scoreB: finalScoreB, timestampRaw: Date.now(), timestamp: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })
                            });
                            batch.delete(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(COURTS_COL).doc(id.toString()));
                            await batch.commit();
+
+                           // 設定 Undo 復原資訊
+                           setLastFinishedMatch({
+                             matchesDocId: matchRef.id,
+                             courtId: id,
+                             courtData: match
+                           });
+                           setUndoCountdown(10);
+                           setShowUndoToast(true);
                         }
                       });
                     }}
@@ -739,6 +1073,8 @@
                     }}
                     getPlayerName={getPlayerName}
                     competitionMode={competitionMode}
+                    isAdmin={isAdmin}
+                    onRequestUnlockAdmin={runAsAdmin}
                   />
                 ))}
               </div>
@@ -787,12 +1123,12 @@
               <div className="space-y-3">
                 <div className="flex justify-end gap-2 mb-2">
                   <button onClick={() => setShowArchivesModal(true)} className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-2 rounded-xl shadow-sm text-sm font-bold flex items-center gap-1 transition-colors"><Icons.Archive size={16} /> 歷年成績</button>
-                  <button onClick={() => setConfirmDialog({ message: "確定要將目前的排行榜封存到歷年成績中嗎？", onConfirm: saveToArchives })} className="bg-green-500 hover:bg-green-600 text-white px-3 py-2 rounded-xl shadow-sm text-sm font-bold flex items-center gap-1 transition-colors"><Icons.Save size={16} /> 封存本次</button>
+                  <button onClick={() => setConfirmDialog({ message: "確定要將目前的排行榜封存到歷年成績中嗎？", onConfirm: () => runAsAdmin(saveToArchives) })} className="bg-green-500 hover:bg-green-600 text-white px-3 py-2 rounded-xl shadow-sm text-sm font-bold flex items-center gap-1 transition-colors"><Icons.Save size={16} /> 封存本次</button>
                   <button onClick={downloadImage} disabled={isExporting} className="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-2 rounded-xl shadow-sm text-sm font-bold flex items-center gap-1 transition-colors disabled:opacity-50">
                     {isExporting ? "處理中..." : <Icons.Download size={16} />} 截圖
                   </button>
                 </div>
-                
+
                 {/* 排行榜截圖區域 */}
                 <div id="standings-capture" className="bg-white p-6 rounded-3xl shadow-sm border border-yellow-100">
                   <h2 className="text-center text-2xl font-bold mb-1 text-gray-800">{tournamentName}</h2>
@@ -819,12 +1155,12 @@
               </div>
             )}
 
-            {/* 6. 清除 (歷史) */}
+            {/* 6. 清除 (歷史記錄與比分編輯) */}
             {activeTab === 'history' && (
               <div className="space-y-4">
                 <div className="flex justify-between items-center px-2">
                   <span className="text-sm text-gray-400 font-bold">共 {matches.length} 筆記錄</span>
-                  {matches.length > 0 && <button onClick={() => setConfirmDialog({ message: "⚠ 警告：確定要清空所有比賽紀錄及排程嗎？(名單會保留)", onConfirm: async () => { const batch = db.batch(); matches.forEach(m => batch.delete(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(MATCHES_COL).doc(m.id))); scheduledQueue.forEach(s => batch.delete(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(SCHEDULE_COL).doc(s.id))); batch.update(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(META_COL).doc('global'), { currentRound: 1 }); await batch.commit(); } })} className="text-red-500 bg-red-100 hover:bg-red-200 px-4 py-2 rounded-full text-xs font-bold transition-colors flex items-center gap-1"><Icons.Trash2 size={14}/> 全部清除</button>}
+                  {matches.length > 0 && <button onClick={() => setConfirmDialog({ message: "⚠ 警告：確定要清空所有比賽紀錄及排程嗎？(名單會保留)", onConfirm: () => runAsAdmin(async () => { const batch = db.batch(); matches.forEach(m => batch.delete(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(MATCHES_COL).doc(m.id))); scheduledQueue.forEach(s => batch.delete(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(SCHEDULE_COL).doc(s.id))); batch.update(db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(META_COL).doc('global'), { currentRound: 1 }); await batch.commit(); }) })} className="text-red-500 bg-red-100 hover:bg-red-200 px-4 py-2 rounded-full text-xs font-bold transition-colors flex items-center gap-1"><Icons.Trash2 size={14}/> 全部清除</button>}
                 </div>
                 {matches.map(m => (
                   <div key={m.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 relative group">
@@ -842,7 +1178,11 @@
                         <div className="text-2xl text-teal-600 mt-2">{m.scoreB}</div>
                       </div>
                     </div>
-                    <button onClick={() => setConfirmDialog({ message: "確定刪除這筆成績？", onConfirm: async () => await db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(MATCHES_COL).doc(m.id).delete() })} className="absolute top-2 right-2 text-gray-300 hover:text-red-500 p-2"><Icons.Trash2 size={16}/></button>
+                    {/* 右上角操作按鈕 (編輯比分 & 刪除) */}
+                    <div className="absolute top-2 right-2 flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
+                      <button onClick={() => runAsAdmin(() => { setEditingMatch(m); setTempEditScoreA(m.scoreA); setTempEditScoreB(m.scoreB); setShowEditScoreModal(true); })} className="text-gray-400 hover:text-blue-500 p-1.5 rounded hover:bg-gray-50"><Icons.Settings size={14}/></button>
+                      <button onClick={() => setConfirmDialog({ message: "確定刪除這筆成績？", onConfirm: () => runAsAdmin(async () => await db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(MATCHES_COL).doc(m.id).delete()) })} className="text-gray-400 hover:text-red-500 p-1.5 rounded hover:bg-gray-50"><Icons.Trash2 size={14}/></button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -850,27 +1190,27 @@
           </div>
 
           {/* --- 共用彈出視窗區域 --- */}
-          
+
           {/* 1. 手動建賽 */}
           {showSetupModal && (
             <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
               <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl max-h-[80vh] overflow-y-auto">
                 <h3 className="text-xl font-bold text-center mb-6 text-gray-800">設定 {setupCourtId} 號場地</h3>
-                
+
                 <div className="mb-4">
                   <div className="flex justify-between mb-2"><span className="font-bold text-sm text-gray-500">A 隊 ({tempTeamA.length}/{competitionMode === 'team' ? 1 : 2})</span></div>
                   <div className="grid grid-cols-3 gap-2">
                     {players.map(p => <button key={p.id} disabled={getBusyPlayerIds().includes(p.id) || tempTeamB.includes(p.id)} onClick={() => toggleSel(p.id, 'A')} className={`text-xs py-2 rounded-lg truncate transition-colors ${tempTeamA.includes(p.id) ? 'bg-teal-500 text-white font-bold' : (getBusyPlayerIds().includes(p.id) || tempTeamB.includes(p.id) ? 'bg-gray-100 text-gray-300 cursor-not-allowed' : 'bg-gray-50 hover:bg-teal-50 text-gray-700')}`}>{p.name}</button>)}
                   </div>
                 </div>
-                
+
                 <div className="mb-8">
                   <div className="flex justify-between mb-2"><span className="font-bold text-sm text-gray-500">B 隊 ({tempTeamB.length}/{competitionMode === 'team' ? 1 : 2})</span></div>
                   <div className="grid grid-cols-3 gap-2">
                     {players.map(p => <button key={p.id} disabled={getBusyPlayerIds().includes(p.id) || tempTeamA.includes(p.id)} onClick={() => toggleSel(p.id, 'B')} className={`text-xs py-2 rounded-lg truncate transition-colors ${tempTeamB.includes(p.id) ? 'bg-orange-500 text-white font-bold' : (getBusyPlayerIds().includes(p.id) || tempTeamA.includes(p.id) ? 'bg-gray-100 text-gray-300 cursor-not-allowed' : 'bg-gray-50 hover:bg-orange-50 text-gray-700')}`}>{p.name}</button>)}
                   </div>
                 </div>
-                
+
                 <button onClick={startManualMatch} className="w-full py-3 bg-gray-800 hover:bg-black text-white rounded-xl font-bold transition-colors">開始比賽</button>
                 <button onClick={closeSetupModal} className="w-full mt-2 text-gray-500 py-3 font-bold hover:bg-gray-50 rounded-xl">取消</button>
               </div>
@@ -933,7 +1273,7 @@
                        {archives.length === 0 ? <div className="text-center text-gray-400 py-6">尚無任何封存紀錄</div> : archives.map(a => (
                          <div key={a.id} onClick={() => setSelectedArchive(a)} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex justify-between items-center cursor-pointer hover:border-teal-300 transition-colors">
                            <div><div className="font-bold text-gray-800">{a.tournamentName}</div><div className="text-xs text-gray-400 mt-1">{a.dateStr}</div></div>
-                           <button onClick={(e) => { e.stopPropagation(); setConfirmDialog({ message: "確定永久刪除這筆歷史存檔嗎？", onConfirm: async () => await db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(ARCHIVES_COL).doc(a.id).delete() }); }} className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"><Icons.Trash2 size={18}/></button>
+                           <button onClick={(e) => { e.stopPropagation(); setConfirmDialog({ message: "確定永久刪除這筆歷史存檔嗎？", onConfirm: () => runAsAdmin(async () => await db.collection(PUBLIC_DATA).doc(DATA_GROUP).collection(ARCHIVES_COL).doc(a.id).delete()) }); }} className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"><Icons.Trash2 size={18}/></button>
                          </div>
                        ))}
                      </div>
@@ -965,6 +1305,108 @@
                   <button onClick={() => { confirmDialog.onConfirm(); setConfirmDialog(null); }} className="flex-1 py-3 bg-red-500 hover:bg-red-600 text-white rounded-xl font-bold transition-colors">確定</button>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* 6. 管理員密碼初始化 Modal */}
+          {showPasswordSetupModal && (
+            <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl">
+                <h3 className="text-xl font-bold mb-3 flex items-center gap-2 text-gray-800"><Icons.Zap size={20} className="text-yellow-500"/> 設定管理密碼</h3>
+                <p className="text-xs text-gray-400 mb-4 leading-relaxed">
+                  本房間（{roomParam === 'core' ? 'default' : roomParam}）尚未設定密碼。請設定一組管理密碼（或簡短的 PIN 碼）以防止其他人誤改數據。設定後，進行管理操作時均需輸入此密碼：
+                </p>
+                <div className="mb-6">
+                  <input 
+                    type="password" 
+                    placeholder="請輸入管理密碼..." 
+                    value={tempInputPassword} 
+                    onChange={e => setTempInputPassword(e.target.value)} 
+                    className="w-full border-2 border-gray-200 rounded-xl px-4 py-2 outline-none focus:border-teal-400 transition-colors"
+                    onKeyDown={e => e.key === 'Enter' && handlePasswordSetup(tempInputPassword)}
+                  />
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => { setShowPasswordSetupModal(false); setPasswordActionCallback(null); }} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl font-bold transition-colors">取消</button>
+                  <button onClick={() => handlePasswordSetup(tempInputPassword)} className="flex-1 py-3 bg-teal-500 hover:bg-teal-600 text-white rounded-xl font-bold transition-colors">設定密碼</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 7. 管理員登入/驗證密碼 Modal */}
+          {showPasswordInputModal && (
+            <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl">
+                <h3 className="text-xl font-bold mb-3 flex items-center gap-2 text-gray-800"><Icons.Zap size={20} className="text-yellow-500"/> 輸入管理員密碼</h3>
+                <p className="text-xs text-gray-400 mb-4 leading-relaxed">
+                  此操作需要本房間的管理員權限，請輸入設定好的管理密碼：
+                </p>
+                <div className="mb-6">
+                  <input 
+                    type="password" 
+                    placeholder="請輸入管理密碼..." 
+                    value={tempInputPassword} 
+                    onChange={e => setTempInputPassword(e.target.value)} 
+                    className="w-full border-2 border-gray-200 rounded-xl px-4 py-2 outline-none focus:border-teal-400 transition-colors"
+                    autoFocus
+                    onKeyDown={e => e.key === 'Enter' && handleAdminLogin(tempInputPassword)}
+                  />
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => { setShowPasswordInputModal(false); setPasswordActionCallback(null); }} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl font-bold transition-colors">取消</button>
+                  <button onClick={() => handleAdminLogin(tempInputPassword)} className="flex-1 py-3 bg-teal-500 hover:bg-teal-600 text-white rounded-xl font-bold transition-colors">驗證密碼</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 8. 歷史紀錄分數修改 Modal */}
+          {showEditScoreModal && editingMatch && (
+            <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl">
+                <h3 className="text-xl font-bold mb-4 text-center text-gray-800">修改賽果比分</h3>
+                
+                <div className="flex justify-between items-center gap-4 mb-6">
+                  <div className="flex-1 text-center bg-gray-50 p-3 rounded-xl border border-gray-100">
+                    <div className="font-bold text-gray-600 text-sm mb-1 truncate">{getPlayerName(editingMatch.teamA[0])} {editingMatch.teamA[1] ? ` / ${getPlayerName(editingMatch.teamA[1])}` : ''}</div>
+                    <input 
+                      type="number" pattern="\d*" 
+                      value={tempEditScoreA} 
+                      onChange={e => setTempEditScoreA(e.target.value)}
+                      className="w-full text-center text-3xl font-black text-gray-800 outline-none bg-transparent border-b-2 border-gray-100 focus:border-teal-400"
+                    />
+                  </div>
+                  <div className="font-bold text-gray-300">VS</div>
+                  <div className="flex-1 text-center bg-gray-50 p-3 rounded-xl border border-gray-100">
+                    <div className="font-bold text-gray-600 text-sm mb-1 truncate">{getPlayerName(editingMatch.teamB[0])} {editingMatch.teamB[1] ? ` / ${getPlayerName(editingMatch.teamB[1])}` : ''}</div>
+                    <input 
+                      type="number" pattern="\d*" 
+                      value={tempEditScoreB} 
+                      onChange={e => setTempEditScoreB(e.target.value)}
+                      className="w-full text-center text-3xl font-black text-gray-800 outline-none bg-transparent border-b-2 border-gray-100 focus:border-teal-400"
+                    />
+                  </div>
+                </div>
+                
+                <div className="flex gap-3">
+                  <button onClick={() => { setShowEditScoreModal(false); setEditingMatch(null); }} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl font-bold transition-colors">取消</button>
+                  <button onClick={saveEditedScore} className="flex-1 py-3 bg-teal-500 hover:bg-teal-600 text-white rounded-xl font-bold transition-colors">確認儲存</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 9. 比分登記的 Undo (復原) Toast */}
+          {showUndoToast && lastFinishedMatch && (
+            <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] bg-gray-900 text-white px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-3 w-80 justify-between animate-bounce border border-gray-800">
+              <div className="flex items-center gap-2">
+                <Icons.Clock className="text-yellow-400 animate-pulse" size={18} />
+                <span className="text-xs font-bold">比分登記成功！剩餘 {undoCountdown} 秒</span>
+              </div>
+              <button onClick={handleUndoFinish} className="bg-yellow-500 hover:bg-yellow-600 text-black text-xs font-black px-3 py-1.5 rounded-xl shadow transition-colors active:scale-95">
+                復原 (Undo)
+              </button>
             </div>
           )}
 
